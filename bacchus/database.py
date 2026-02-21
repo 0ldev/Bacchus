@@ -37,6 +37,7 @@ class Message:
     rag_sources: Optional[str] = None
     mcp_calls: Optional[str] = None
     image_path: Optional[str] = None
+    image_description: Optional[str] = None
 
 
 def get_database_connection(db_path: Union[str, Path]) -> sqlite3.Connection:
@@ -92,6 +93,7 @@ def create_tables(conn: sqlite3.Connection) -> None:
             rag_sources TEXT,
             mcp_calls TEXT,
             image_path TEXT,
+            image_description TEXT,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         )
     """)
@@ -99,6 +101,13 @@ def create_tables(conn: sqlite3.Connection) -> None:
     # Migration: add image_path column to existing databases
     try:
         cursor.execute("ALTER TABLE messages ADD COLUMN image_path TEXT")
+        conn.commit()
+    except Exception:
+        pass  # Column already exists
+
+    # Migration: add image_description column to existing databases
+    try:
+        cursor.execute("ALTER TABLE messages ADD COLUMN image_description TEXT")
         conn.commit()
     except sqlite3.OperationalError:
         pass  # Column already exists
@@ -158,7 +167,8 @@ def add_message(
     content: str,
     rag_sources: Optional[List[Dict]] = None,
     mcp_calls: Optional[List[Dict]] = None,
-    image_path: Optional[str] = None
+    image_path: Optional[str] = None,
+    image_description: Optional[str] = None
 ) -> int:
     """
     Add a message to a conversation.
@@ -171,6 +181,7 @@ def add_message(
         rag_sources: List of RAG source references (stored as JSON)
         mcp_calls: List of MCP tool calls (stored as JSON)
         image_path: Optional path to attached image (VLM messages)
+        image_description: Optional text description of attached image
 
     Returns:
         ID of the created message
@@ -185,11 +196,11 @@ def add_message(
     cursor.execute("""
         INSERT INTO messages (
             conversation_id, role, content, created_at,
-            rag_sources, mcp_calls, image_path
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            rag_sources, mcp_calls, image_path, image_description
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         conversation_id, role, content, now,
-        rag_sources_json, mcp_calls_json, image_path
+        rag_sources_json, mcp_calls_json, image_path, image_description
     ))
 
     # Update conversation's updated_at timestamp
@@ -218,7 +229,7 @@ def get_conversation_messages(
     cursor = conn.cursor()
     cursor.execute("""
         SELECT id, conversation_id, role, content, created_at,
-               rag_sources, mcp_calls, image_path
+               rag_sources, mcp_calls, image_path, image_description
         FROM messages
         WHERE conversation_id = ?
         ORDER BY id ASC
@@ -319,6 +330,27 @@ def update_message(
             params
         )
         conn.commit()
+
+
+def update_message_image_description(
+    conn: sqlite3.Connection,
+    message_id: int,
+    image_description: str
+) -> None:
+    """
+    Set the image_description for a message.
+
+    Args:
+        conn: SQLite database connection
+        message_id: ID of the message to update
+        image_description: Text description of the attached image
+    """
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE messages SET image_description = ? WHERE id = ?",
+        (image_description, message_id)
+    )
+    conn.commit()
 
 
 def list_conversations(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
@@ -463,11 +495,13 @@ class Database:
         content: str,
         rag_sources: Optional[List[Dict]] = None,
         mcp_calls: Optional[List[Dict]] = None,
-        image_path: Optional[str] = None
+        image_path: Optional[str] = None,
+        image_description: Optional[str] = None
     ) -> int:
         """Add a message to a conversation."""
         return add_message(
-            self.conn, conversation_id, role, content, rag_sources, mcp_calls, image_path
+            self.conn, conversation_id, role, content, rag_sources, mcp_calls,
+            image_path, image_description
         )
     
     def get_conversation_messages(self, conversation_id: int) -> List[Message]:
@@ -482,7 +516,8 @@ class Database:
                 created_at=d['created_at'],
                 rag_sources=d.get('rag_sources'),
                 mcp_calls=d.get('mcp_calls'),
-                image_path=d.get('image_path')
+                image_path=d.get('image_path'),
+                image_description=d.get('image_description')
             )
             for d in dicts
         ]
@@ -516,6 +551,10 @@ class Database:
     ) -> None:
         """Update a message."""
         update_message(self.conn, message_id, content, rag_sources, mcp_calls)
+
+    def update_message_image_description(self, message_id: int, image_description: str) -> None:
+        """Set the image_description for a message."""
+        update_message_image_description(self.conn, message_id, image_description)
     
     def list_conversations(self) -> List[Conversation]:
         """List all conversations."""

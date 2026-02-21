@@ -26,6 +26,7 @@ class VLMInferenceWorker(QThread):
 
     generation_completed = pyqtSignal(str)   # Emits full response text
     generation_failed = pyqtSignal(str)       # Emits error message
+    image_described = pyqtSignal(int, str)    # Emits (message_id, description) after auto-describe
 
     def __init__(
         self,
@@ -92,6 +93,11 @@ class VLMInferenceWorker(QThread):
 
             logger.debug(f"VLM system message length: {len(self.system_message)} chars")
 
+            # -- Auto-describe image if not yet described ----------------
+            current = self.messages[-1]
+            if current.image_path and not current.image_description:
+                self._auto_describe(ov_genai, current)
+
             self.vlm_pipeline.start_chat(self.system_message)
             try:
                 response_text = self._generate_with_history(ov_genai)
@@ -104,6 +110,45 @@ class VLMInferenceWorker(QThread):
         except Exception as e:
             logger.error(f"VLM inference failed: {e}", exc_info=True)
             self.generation_failed.emit(str(e))
+
+    # ------------------------------------------------------------------
+    # image auto-description
+    # ------------------------------------------------------------------
+
+    def _auto_describe(self, ov_genai, message) -> None:
+        """Generate a text description of the image attached to *message* and emit image_described.
+
+        Uses a short isolated start_chat/finish_chat session so it does not pollute the
+        main conversation KV-cache.
+        """
+        import os
+        if not os.path.isfile(message.image_path):
+            logger.warning(f"Auto-describe: image file not found: {message.image_path}")
+            return
+        try:
+            tensor = self._load_image_tensor(message.image_path)
+            describe_prompt = (
+                "Describe this image in detail. "
+                "Preserve all visible text, numbers, labels, data, and key visual elements exactly. "
+                "If this is a document or screenshot, transcribe all readable text."
+            )
+            cfg = ov_genai.GenerationConfig()
+            cfg.max_new_tokens = 256
+            cfg.do_sample = False
+
+            self.vlm_pipeline.start_chat("")
+            try:
+                result = self.vlm_pipeline.generate(describe_prompt, image=tensor, generation_config=cfg)
+                description = result.texts[0].strip()
+            finally:
+                self.vlm_pipeline.finish_chat()
+
+            logger.info(f"Auto-described image for message {message.id}: {len(description)} chars")
+            self.image_described.emit(message.id, description)
+            # Patch in-memory so the same worker instance sees the description during replay
+            message.image_description = description
+        except Exception as e:
+            logger.warning(f"Auto-describe failed for {message.image_path}: {e}")
 
     def _generate_with_history(self, ov_genai) -> str:
         """
@@ -121,13 +166,13 @@ class VLMInferenceWorker(QThread):
           Assistant messages are skipped because the KV-cache already holds them as
           the output of the preceding generate() call.
         - The final message is generated with the real generation config / token budget.
-        - Images are attached only to the first user message that carries an image_path.
+        - Images are attached to every user message that carries a valid image_path on disk.
         """
+        import os
         prior = self.messages[:-1]
         current = self.messages[-1]
 
         # ---- replay prior turns ----------------------------------------
-        first_user_seen = False
         for msg in prior:
             if msg.role == "assistant":
                 # Already in KV cache as output of the preceding generate() call.
@@ -136,13 +181,12 @@ class VLMInferenceWorker(QThread):
                 continue
 
             imgs = []
-            if msg.role == "user" and msg.image_path and not first_user_seen:
+            if msg.role == "user" and msg.image_path and os.path.isfile(msg.image_path):
                 try:
                     imgs = [self._load_image_tensor(msg.image_path)]
                     logger.debug(f"Replay: loaded image {msg.image_path}")
                 except Exception as e:
                     logger.warning(f"Replay: failed to load image {msg.image_path}: {e}")
-                first_user_seen = True
 
             # Small budget — we only need the KV-cache side-effect.
             replay_config = ov_genai.GenerationConfig()
@@ -155,7 +199,7 @@ class VLMInferenceWorker(QThread):
 
         # ---- final turn ------------------------------------------------
         imgs = []
-        if current.role == "user" and current.image_path:
+        if current.role == "user" and current.image_path and os.path.isfile(current.image_path):
             try:
                 imgs = [self._load_image_tensor(current.image_path)]
                 logger.info(f"Loaded image for final turn: {current.image_path}")

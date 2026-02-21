@@ -780,8 +780,17 @@ class MainWindow(QMainWindow):
         messages = self.database.get_conversation_messages(self._current_conversation_id)
 
         # Convert to format expected by inference
+        # For messages with an image, prepend the stored description so both the
+        # LLM path and VLM-with-no-file path have textual image context.
         formatted_messages = [
-            {"role": msg.role, "content": msg.content}
+            {
+                "role": msg.role,
+                "content": (
+                    f"[Image: {msg.image_description}]\n{msg.content}"
+                    if msg.image_description
+                    else msg.content
+                )
+            }
             for msg in messages
         ]
 
@@ -805,6 +814,12 @@ class MainWindow(QMainWindow):
         # Trim context if needed
         system_tokens = estimate_tokens(system_message)
         rag_tokens = estimate_tokens(rag_context) if rag_context else 0
+
+        logger.info(
+            f"Context window: {context_window} tokens | "
+            f"model={model_folder} | "
+            f"history={len(formatted_messages)} messages"
+        )
 
         trimmed_messages = trim_context_fifo(
             formatted_messages,
@@ -874,9 +889,23 @@ class MainWindow(QMainWindow):
                 generation_config=vlm_generation_config,
             )
 
+            # VLM context accounting (no trim — full history replayed via KV-cache)
+            vlm_system_tokens = estimate_tokens(system_message)
+            vlm_history_tokens = sum(estimate_tokens(m.content or "") + 4 for m in messages)
+            vlm_total = vlm_system_tokens + vlm_history_tokens
+            images_in_history = sum(1 for m in messages if m.image_path)
+            logger.info(
+                f"VLM context: {context_window} window | "
+                f"system={vlm_system_tokens} history={vlm_history_tokens} "
+                f"({len(messages)} messages, {images_in_history} with images) | "
+                f"estimate={vlm_total} ({100 * vlm_total / context_window:.1f}%) | "
+                f"response_budget={max_new_tokens}"
+            )
+
             self._current_response = ""
             self._inference_conversation_id = self._current_conversation_id
 
+            self._inference_worker.image_described.connect(self._on_image_described)
             self._inference_worker.generation_completed.connect(self._on_generation_completed)
             self._inference_worker.generation_failed.connect(self._on_generation_failed)
             self._inference_worker.start()
@@ -937,6 +966,14 @@ class MainWindow(QMainWindow):
         self._inference_worker.start()
         logger.info("Inference worker started")
     
+    def _on_image_described(self, message_id: int, description: str) -> None:
+        """Store auto-generated image description produced by VLMInferenceWorker."""
+        try:
+            self.database.update_message_image_description(message_id, description)
+            logger.info(f"Stored image description for message {message_id} ({len(description)} chars)")
+        except Exception as e:
+            logger.warning(f"Failed to store image description for message {message_id}: {e}")
+
     def _on_token_generated(self, token: str):
         """Handle token generation (streaming)."""
         # Accumulate response

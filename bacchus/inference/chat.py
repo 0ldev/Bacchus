@@ -90,34 +90,70 @@ def trim_context_fifo(
     Returns:
         Trimmed list of messages that fits within limit
     """
+    import logging
+    _log = logging.getLogger(__name__)
+
     if not messages:
         return []
 
     # Calculate available tokens for conversation history
     available = max_tokens - system_tokens - rag_tokens - response_buffer
 
-    if available <= 0:
-        # No room for history, return at least newest messages
-        return messages[-2:] if len(messages) >= 2 else messages
-
     # Calculate tokens for each message
     message_tokens = [estimate_tokens(m.get("content", "")) + 4 for m in messages]
+    total_history_tokens = sum(message_tokens)
+    total_used = system_tokens + rag_tokens + total_history_tokens
+
+    _log.info(
+        f"Context budget: {max_tokens} total | "
+        f"system={system_tokens} rag={rag_tokens} "
+        f"history={total_history_tokens} response_buffer={response_buffer} | "
+        f"used={total_used} available_for_history={available}"
+    )
+
+    if available <= 0:
+        # No room for history, return at least newest messages
+        _log.warning("Context overflow: system+RAG alone exceed budget, keeping only newest 2 messages")
+        return messages[-2:] if len(messages) >= 2 else messages
 
     # Try to fit as many messages as possible, keeping newest
-    total_tokens = sum(message_tokens)
-
-    if total_tokens <= available:
+    if total_history_tokens <= available:
         # All messages fit
+        _log.info(
+            f"Context OK: {len(messages)} messages fit "
+            f"({total_used}/{max_tokens} tokens, "
+            f"{100 * total_used / max_tokens:.1f}% used)"
+        )
         return messages
 
     # Remove oldest pairs until we fit
     result = list(messages)
     result_tokens = list(message_tokens)
+    dropped_count = 0
+    dropped_tokens = 0
 
     while len(result) > 2 and sum(result_tokens) > available:
         # Remove oldest pair (first 2 messages)
+        pair_tokens = result_tokens[0] + result_tokens[1]
+        pair_roles = f"{result[0].get('role','?')}/{result[1].get('role','?')}"
+        pair_preview = result[0].get('content', '')[:60].replace('\n', ' ')
+        _log.info(
+            f"Context trim: dropping oldest pair [{pair_roles}] "
+            f"~{pair_tokens} tokens — \"{pair_preview}…\""
+        )
         result = result[2:]
         result_tokens = result_tokens[2:]
+        dropped_count += 1
+        dropped_tokens += pair_tokens
+
+    kept_tokens = sum(result_tokens)
+    final_total = system_tokens + rag_tokens + kept_tokens
+    _log.info(
+        f"Context after trim: dropped {dropped_count} pairs (~{dropped_tokens} tokens) | "
+        f"kept {len(result)} messages (~{kept_tokens} tokens) | "
+        f"final estimate {final_total}/{max_tokens} tokens "
+        f"({100 * final_total / max_tokens:.1f}% used)"
+    )
 
     return result
 
