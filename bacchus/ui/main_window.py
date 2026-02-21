@@ -795,10 +795,11 @@ class MainWindow(QMainWindow):
         ]
 
         # Get system message from dynamic prompt manager
-        language = self._settings.get("language", "en")
+        # System prompt is always English — LLMs follow English instructions more reliably
+        # regardless of the user's conversation language.
         from bacchus.prompts import get_prompt_manager
 
-        prompt_manager = get_prompt_manager(language)
+        prompt_manager = get_prompt_manager()
         system_message = prompt_manager.get_system_prompt(self.mcp_manager)
 
         logger.debug(f"Loaded dynamic system prompt ({len(system_message)} chars)")

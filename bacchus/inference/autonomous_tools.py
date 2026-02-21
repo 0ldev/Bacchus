@@ -24,7 +24,7 @@ class ToolCall:
     raw_text: str = ""
 
 
-def build_tool_system_prompt(mcp_manager, language: str = "en") -> str:
+def build_tool_system_prompt(mcp_manager) -> str:
     """
     Build system prompt section that describes available tools.
 
@@ -32,7 +32,6 @@ def build_tool_system_prompt(mcp_manager, language: str = "en") -> str:
 
     Args:
         mcp_manager: MCPManager instance
-        language: Language code
 
     Returns:
         Tool description for system prompt
@@ -58,10 +57,7 @@ def build_tool_system_prompt(mcp_manager, language: str = "en") -> str:
     if not tools:
         return ""
 
-    if language == "pt":
-        return _build_portuguese_system_prompt(tools)
-    else:
-        return _build_english_system_prompt(tools)
+    return _build_english_system_prompt(tools)
 
 
 def _build_english_system_prompt(tools: List[Dict[str, Any]]) -> str:
@@ -105,53 +101,6 @@ def _build_english_system_prompt(tools: List[Dict[str, Any]]) -> str:
         '{"action": "respond", "response": "4"}',
         "",
         "**Available tools:**",
-        ""
-    ]
-
-    for tool in tools:
-        params = tool.get("parameters", {}).get("properties", {})
-        param_list = ", ".join(f"`{p}`" for p in params) if params else ""
-        desc = f"{tool['description']}"
-        if param_list:
-            desc += f" (params: {param_list})"
-        lines.append(f"- **{tool['name']}**: {desc}")
-
-    lines.append("")
-
-    return "\n".join(lines)
-
-
-def _build_portuguese_system_prompt(tools: List[Dict[str, Any]]) -> str:
-    """Build Portuguese system prompt with tool descriptions (for structured generation)."""
-    lines = [
-        "",
-        "# Ferramentas",
-        "",
-        "Você tem acesso em tempo real às seguintes ferramentas. DEVE usá-las quando a solicitação do usuário exigir.",
-        "",
-        "**Quando usar `search_web`:**",
-        "- Usuário pergunta sobre notícias, eventos atuais, preços, dados em tempo real",
-        "- NUNCA use search_web para cálculos matemáticos ou algorítmicos",
-        "- NUNCA repita a mesma consulta search_web se já retornou sem resultados — tente outra abordagem",
-        "- NUNCA invente URLs — use apenas URLs que apareceram nos resultados do search_web",
-        "",
-        "**Quando usar `execute_command`:**",
-        "- Usuário pede para calcular, computar ou encontrar um resultado matemático → escreva código Python e execute",
-        "- Usuário pede para criar, executar ou testar um script",
-        "- Um execute_command anterior falhou → corrija o código e tente novamente, NÃO use search_web",
-        "",
-        "**Quando usar action=respond (sem ferramenta):**",
-        "- Pergunta que você pode responder com seu conhecimento",
-        "- Usuário está conversando ou perguntando sobre suas capacidades",
-        "",
-        "**Exemplo — usuário pede um cálculo — escreva script depois execute:**",
-        '{"action": "tool_call", "tool": "write_file", "arguments": {"path": "C:\\\\Users\\\\B3T0\\\\calc.py", "content": "a,b=0,1\\nfor _ in range(834):\\n    a,b=b,a+b\\nprint(b)"}}',
-        "depois: " + '{"action": "tool_call", "tool": "execute_command", "arguments": {"command": "python C:\\\\Users\\\\B3T0\\\\calc.py"}}',
-        "",
-        "**Exemplo — usuário pede 'pesquise iphone 17':**",
-        '{"action": "tool_call", "tool": "search_web", "arguments": {"query": "iphone 17"}}',
-        "",
-        "**Ferramentas disponíveis:**",
         ""
     ]
 

@@ -42,15 +42,9 @@ class PromptManager:
         "tools.md"
     ]
 
-    def __init__(self, language: str = "en"):
-        """
-        Initialize prompt manager.
-
-        Args:
-            language: Language code (en or pt-BR)
-        """
-        self.language = language
-        self.prompts_dir = Path(__file__).parent / language
+    def __init__(self):
+        """Initialize prompt manager."""
+        self.prompts_dir = Path(__file__).parent / "en"
         self._cached_prompt: Optional[str] = None
         self._cached_tools_content: Optional[str] = None
         self._observer: Optional[Observer] = None
@@ -85,19 +79,6 @@ class PromptManager:
         logger.info("Reloading system prompt from files")
         self._cached_prompt = None
         self._cached_tools_content = None
-
-    def set_language(self, language: str):
-        """
-        Change the language and reload prompts.
-
-        Args:
-            language: Language code (en or pt-BR)
-        """
-        if language != self.language:
-            logger.info(f"Changing prompt language from {self.language} to {language}")
-            self.language = language
-            self.prompts_dir = Path(__file__).parent / language
-            self.reload()
 
     def _load_prompt_file(self, filename: str) -> str:
         """
@@ -138,7 +119,7 @@ class PromptManager:
         # Import here to avoid circular dependency
         from bacchus.inference.autonomous_tools import build_tool_system_prompt
 
-        tools_content = build_tool_system_prompt(mcp_manager, self.language)
+        tools_content = build_tool_system_prompt(mcp_manager)
 
         if not tools_content:
             return ""
@@ -251,22 +232,13 @@ class PromptManager:
 
         # If still no header, create default
         if not header_lines:
-            if self.language == "pt-BR":
-                header_lines = [
-                    "# Ferramentas Disponíveis",
-                    "",
-                    "Esta seção é gerada automaticamente a partir dos servidores MCP em execução.",
-                    "",
-                    "<!-- AUTO-GERADO: Não edite manualmente abaixo desta linha -->"
-                ]
-            else:
-                header_lines = [
-                    "# Available Tools",
-                    "",
-                    "This section is automatically generated from running MCP servers.",
-                    "",
-                    "<!-- AUTO-GENERATED: Do not manually edit below this line -->"
-                ]
+            header_lines = [
+                "# Available Tools",
+                "",
+                "This section is automatically generated from running MCP servers.",
+                "",
+                "<!-- AUTO-GENERATED: Do not manually edit below this line -->"
+            ]
 
         # Combine header and tools
         full_content = "\n".join(header_lines) + "\n\n" + tools_content
@@ -282,12 +254,9 @@ class PromptManager:
 _prompt_manager: Optional[PromptManager] = None
 
 
-def get_prompt_manager(language: str = "en") -> PromptManager:
+def get_prompt_manager() -> PromptManager:
     """
     Get or create the global prompt manager instance.
-
-    Args:
-        language: Language code (en or pt-BR)
 
     Returns:
         PromptManager instance
@@ -295,9 +264,7 @@ def get_prompt_manager(language: str = "en") -> PromptManager:
     global _prompt_manager
 
     if _prompt_manager is None:
-        _prompt_manager = PromptManager(language)
+        _prompt_manager = PromptManager()
         _prompt_manager.start_watching()
-    elif _prompt_manager.language != language:
-        _prompt_manager.set_language(language)
 
     return _prompt_manager

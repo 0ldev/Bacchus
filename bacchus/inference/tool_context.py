@@ -12,7 +12,7 @@ from typing import List, Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 
-def generate_tool_context(mcp_manager, language: str = "en") -> str:
+def generate_tool_context(mcp_manager) -> str:
     """
     Generate tool availability context for system prompt.
 
@@ -20,7 +20,6 @@ def generate_tool_context(mcp_manager, language: str = "en") -> str:
 
     Args:
         mcp_manager: MCPManager instance with running servers
-        language: Language code ("en" or "pt")
 
     Returns:
         Tool context string to append to system prompt
@@ -48,11 +47,7 @@ def generate_tool_context(mcp_manager, language: str = "en") -> str:
     if not available_tools:
         return ""
 
-    # Build context based on language
-    if language == "pt":
-        return _build_portuguese_tool_context(available_tools)
-    else:
-        return _build_english_tool_context(available_tools)
+    return _build_english_tool_context(available_tools)
 
 
 def _build_english_tool_context(tools: List[Dict[str, Any]]) -> str:
@@ -108,56 +103,7 @@ def _build_english_tool_context(tools: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def _build_portuguese_tool_context(tools: List[Dict[str, Any]]) -> str:
-    """Build Portuguese tool context."""
-    lines = [
-        "",
-        "## Ferramentas Disponíveis",
-        "",
-        "Você tem acesso às seguintes ferramentas. Para solicitar uma ferramenta, instrua o usuário a usar o formato de comando slash.",
-        ""
-    ]
 
-    # Group by server
-    tools_by_server: Dict[str, List[Dict]] = {}
-    for tool in tools:
-        server = tool["server"]
-        if server not in tools_by_server:
-            tools_by_server[server] = []
-        tools_by_server[server].append(tool)
-
-    # Format each server's tools
-    for server_name, server_tools in tools_by_server.items():
-        lines.append(f"### Servidor {server_name.capitalize()}")
-        lines.append("")
-
-        for tool in server_tools:
-            slash_cmd = _tool_to_slash_command(tool["name"])
-
-            lines.append(f"**{slash_cmd}** - {tool['description']}")
-
-            # Add parameter info
-            if tool["parameters"] and "properties" in tool["parameters"]:
-                props = tool["parameters"]["properties"]
-                required = tool["parameters"].get("required", [])
-
-                param_desc = []
-                for param_name, param_info in props.items():
-                    is_required = param_name in required
-                    req_marker = " (obrigatório)" if is_required else " (opcional)"
-                    param_desc.append(f"  - `{param_name}`: {param_info.get('description', '')}{req_marker}")
-
-                if param_desc:
-                    lines.append("  Parâmetros:")
-                    lines.extend(param_desc)
-
-            lines.append("")
-
-    lines.append("**Como usar:** Quando o usuário precisar de uma ferramenta, sugira que use o comando slash apropriado.")
-    lines.append("Exemplo: \"Você pode usar `/read arquivo.txt` para ler esse arquivo.\"")
-    lines.append("")
-
-    return "\n".join(lines)
 
 
 def _tool_to_slash_command(tool_name: str) -> str:

@@ -354,7 +354,7 @@ def run_application(argv: list) -> int:
 
         # Update tools.md file with current tools
         from bacchus.prompts import get_prompt_manager
-        prompt_mgr = get_prompt_manager(settings.get("language", "en"))
+        prompt_mgr = get_prompt_manager()
         prompt_mgr.update_tools_file(mcp_manager)
         logger.info("Updated tools.md file")
 
