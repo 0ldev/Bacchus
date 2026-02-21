@@ -1,0 +1,188 @@
+# English localization for Bacchus
+# Language: English
+
+app:
+  name: "Bacchus"
+  version: "v0.1.0"
+
+menu:
+  file: "File"
+  help: "Help"
+  new_conversation: "New Conversation"
+  export_current: "Export Current"
+  settings: "Settings"
+  exit: "Exit"
+  open_data_folder: "Open Data Folder"
+  about: "About Bacchus"
+
+sidebar:
+  new_conversation: "+ New Conversation"
+  today: "Today"
+  yesterday: "Yesterday"
+  last_7_days: "Last 7 Days"
+  last_30_days: "Last 30 Days"
+  older: "Older"
+  export_as_txt: "Export as TXT"
+  delete: "Delete"
+  delete_conversation: "Delete Conversation?"
+  cannot_undo: "This cannot be undone."
+
+chat:
+  you: "You"
+  tool: "Tool"
+  edit: "Edit"
+  regenerate: "Regenerate"
+  sources: "Sources"
+  tools_used: "Tools Used"
+  calling_tool: "Calling Tool:"
+  type_message: "Type your message..."
+  save_regenerate: "Save & Regenerate"
+  cancel: "Cancel"
+  no_conversation: "Select a conversation or create a new one"
+  no_messages: "No messages yet. Start typing below!"
+
+prompt:
+  add_document: "Add Document"
+  remove_document: "Remove Document"
+  select_document: "Select Document"
+  remove_document_confirm: "Remove document from this conversation?"
+  send: "Send"
+  processing_document: "Processing document..."
+  attach_image: "Attach Image"
+  image_attached: "Image attached"
+  select_image: "Select Image"
+  remove_image: "Remove Image"
+
+settings:
+  title: "Settings"
+  general: "General"
+  models: "Models"
+  performance: "Performance"
+  mcp_servers: "MCP Servers"
+
+  # General tab
+  language: "Interface Language"
+  language_restart: "Restart required to apply language change"
+  restart_now: "Restart Now"
+  later: "Later"
+  data_folders: "Data Folders"
+  open_conversations: "Open Conversations Folder"
+  open_models: "Open Models Folder"
+  open_logs: "Open Logs Folder"
+  open_prompts: "Open Prompts Folder"
+  open_config: "Open Config Folder"
+
+  # Models tab
+  active_model: "Active Model"
+  currently_loaded: "Currently loaded:"
+  switch_to: "Switch to:"
+  apply: "Apply"
+  download_models: "Download Models"
+  download: "Download"
+  downloading: "Downloading..."
+  downloaded: "Downloaded"
+  delete_model: "Delete"
+  delete_model_confirm: "Delete this model? You can re-download it later."
+  embedding_required: "(Embedding - Required for RAG)"
+
+  # Performance tab
+  npu_config: "NPU Configuration"
+  turbo_mode: "Enable NPU Turbo Mode"
+  turbo_desc: "Higher performance, higher power consumption"
+  startup: "Startup"
+  autoload_model: "Auto-load last used model on startup"
+  autoload_help: "When enabled, the last used model will be loaded automatically"
+  memory_mgmt: "Memory Management"
+  memory_exceeded: "When conversation exceeds available memory:"
+  fifo_mode: "Remove oldest messages (FIFO)"
+  compact_mode: "Compact older messages (summarize)"
+  coming_soon: "Coming Soon"
+
+  # Permissions tab
+  tab_permissions: "Permissions"
+  permissions_scripts_dir: "Scripts Directory"
+  permissions_scripts_help: "Default location where the assistant saves generated scripts."
+  permissions_browse: "Browse"
+  permissions_open: "Open"
+  permissions_tool_policy: "Tool Permissions"
+  permissions_tool_col: "Tool"
+  permissions_policy_col: "Permission"
+  permissions_ask: "Ask"
+  permissions_always_allow: "Always allow"
+  permissions_sandbox_always: "Sandbox always"
+  permissions_always_deny: "Always deny"
+  permissions_save: "Save"
+  permissions_open_sandbox: "Open Sandbox Folder"
+  permissions_reset: "Reset all to defaults"
+
+  # MCP tab
+  mcp_servers: "MCP Servers"
+  running: "Running"
+  stopped: "Stopped"
+  error: "Error"
+  autostart: "Autostart"
+  start: "Start"
+  stop: "Stop"
+  edit: "Edit"
+  add_mcp: "Add MCP Server"
+  server_name: "Server Name"
+  command: "Command"
+  start_with_bacchus: "Start automatically with Bacchus"
+  save: "Save"
+  open_mcp_config: "Open Config File"
+
+status:
+  model: "Model:"
+  model_none: "None"
+  model_loading: "Loading model..."
+  npu: "NPU:"
+  ram: "RAM:"
+
+errors:
+  npu_not_found: "Intel NPU not detected"
+  npu_not_found_desc: |
+    Intel NPU was not detected on this system.
+
+    Bacchus requires an Intel NPU (Neural Processing Unit)
+    for model inference. This is available on Intel Core
+    Ultra processors (Meteor Lake, Lunar Lake).
+
+    The application will continue, but chat functionality
+    will be unavailable.
+  model_error: "Failed to load model"
+  model_error_desc: "Details have been written to:"
+  document_error: "Failed to process document"
+  mcp_error: "MCP server error"
+
+dialogs:
+  ok: "OK"
+  cancel: "Cancel"
+  remove: "Remove"
+  delete: "Delete"
+
+capability:
+  use: "Use"
+  ignore: "Ignore"
+  execute: "Execute"
+  confirm_title: "Confirm Tool Use"
+
+about:
+  title: "About Bacchus"
+  description: |
+    Bacchus v0.1.0
+
+    Local LLM Chat Application
+    Powered by OpenVINO
+
+    © 2025
+
+first_launch:
+  welcome: "Welcome to Bacchus"
+  choose_language: "Choose your language:"
+  no_models: "No chat models found."
+  download_prompt: "To get started, please download at least one chat model."
+  open_model_settings: "Open Model Settings"
+
+system_prompts:
+  default: |
+    You are Bacchus, a helpful AI assistant running locally on the user's computer. Answer questions clearly and concisely. If you use information from an attached document, cite the specific source. If you don't know something or are uncertain, say so honestly. Be helpful but avoid unnecessary verbosity.

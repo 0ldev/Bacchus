@@ -1,0 +1,188 @@
+# Brazilian Portuguese localization for Bacchus
+# Language: Português (Brasil)
+
+app:
+  name: "Bacchus"
+  version: "v0.1.0"
+
+menu:
+  file: "Arquivo"
+  help: "Ajuda"
+  new_conversation: "Nova Conversa"
+  export_current: "Exportar Atual"
+  settings: "Configurações"
+  exit: "Sair"
+  open_data_folder: "Abrir Pasta de Dados"
+  about: "Sobre o Bacchus"
+
+sidebar:
+  new_conversation: "+ Nova Conversa"
+  today: "Hoje"
+  yesterday: "Ontem"
+  last_7_days: "Últimos 7 Dias"
+  last_30_days: "Últimos 30 Dias"
+  older: "Mais Antigos"
+  export_as_txt: "Exportar como TXT"
+  delete: "Excluir"
+  delete_conversation: "Excluir Conversa?"
+  cannot_undo: "Esta ação não pode ser desfeita."
+
+chat:
+  you: "Você"
+  tool: "Ferramenta"
+  edit: "Editar"
+  regenerate: "Regenerar"
+  sources: "Fontes"
+  tools_used: "Ferramentas Usadas"
+  calling_tool: "Chamando Ferramenta:"
+  type_message: "Digite sua mensagem..."
+  save_regenerate: "Salvar e Regenerar"
+  cancel: "Cancelar"
+  no_conversation: "Selecione uma conversa ou crie uma nova"
+  no_messages: "Nenhuma mensagem ainda. Comece a digitar abaixo!"
+
+prompt:
+  add_document: "Adicionar Documento"
+  remove_document: "Remover Documento"
+  select_document: "Selecionar Documento"
+  remove_document_confirm: "Remover documento desta conversa?"
+  send: "Enviar"
+  processing_document: "Processando documento..."
+  attach_image: "Anexar Imagem"
+  image_attached: "Imagem anexada"
+  select_image: "Selecionar Imagem"
+  remove_image: "Remover Imagem"
+
+settings:
+  title: "Configurações"
+  general: "Geral"
+  models: "Modelos"
+  performance: "Desempenho"
+  mcp_servers: "Servidores MCP"
+
+  # General tab
+  language: "Idioma da Interface"
+  language_restart: "Reinicialização necessária para aplicar a mudança de idioma"
+  restart_now: "Reiniciar Agora"
+  later: "Depois"
+  data_folders: "Pastas de Dados"
+  open_conversations: "Abrir Pasta de Conversas"
+  open_models: "Abrir Pasta de Modelos"
+  open_logs: "Abrir Pasta de Logs"
+  open_prompts: "Abrir Pasta de Prompts"
+  open_config: "Abrir Pasta de Configurações"
+
+  # Models tab
+  active_model: "Modelo Ativo"
+  currently_loaded: "Carregado atualmente:"
+  switch_to: "Mudar para:"
+  apply: "Aplicar"
+  download_models: "Baixar Modelos"
+  download: "Baixar"
+  downloading: "Baixando..."
+  downloaded: "Baixado"
+  delete_model: "Excluir"
+  delete_model_confirm: "Excluir este modelo? Você pode baixá-lo novamente depois."
+  embedding_required: "(Embedding - Necessário para RAG)"
+
+  # Performance tab
+  npu_config: "Configuração da NPU"
+  turbo_mode: "Ativar Modo Turbo da NPU"
+  turbo_desc: "Maior desempenho, maior consumo de energia"
+  startup: "Inicialização"
+  autoload_model: "Carregar último modelo usado na inicialização"
+  autoload_help: "Quando ativado, o último modelo usado será carregado automaticamente"
+  memory_mgmt: "Gerenciamento de Memória"
+  memory_exceeded: "Quando a conversa exceder a memória disponível:"
+  fifo_mode: "Remover mensagens mais antigas (FIFO)"
+  compact_mode: "Compactar mensagens antigas (resumir)"
+  coming_soon: "Em Breve"
+
+  # Permissions tab
+  tab_permissions: "Permissões"
+  permissions_scripts_dir: "Diretório de Scripts"
+  permissions_scripts_help: "Local padrão onde o assistente salva scripts gerados."
+  permissions_browse: "Procurar"
+  permissions_open: "Abrir"
+  permissions_tool_policy: "Permissões de Ferramentas"
+  permissions_tool_col: "Ferramenta"
+  permissions_policy_col: "Permissão"
+  permissions_ask: "Perguntar"
+  permissions_always_allow: "Sempre permitir"
+  permissions_sandbox_always: "Sandbox sempre"
+  permissions_always_deny: "Sempre negar"
+  permissions_save: "Salvar"
+  permissions_open_sandbox: "Abrir Pasta Sandbox"
+  permissions_reset: "Redefinir para padrões"
+
+  # MCP tab
+  mcp_servers: "Servidores MCP"
+  running: "Em Execução"
+  stopped: "Parado"
+  error: "Erro"
+  autostart: "Iniciar Automaticamente"
+  start: "Iniciar"
+  stop: "Parar"
+  edit: "Editar"
+  add_mcp: "Adicionar Servidor MCP"
+  server_name: "Nome do Servidor"
+  command: "Comando"
+  start_with_bacchus: "Iniciar automaticamente com o Bacchus"
+  save: "Salvar"
+  open_mcp_config: "Abrir Arquivo de Config"
+
+status:
+  model: "Modelo:"
+  model_none: "Nenhum"
+  model_loading: "Carregando modelo..."
+  npu: "NPU:"
+  ram: "RAM:"
+
+errors:
+  npu_not_found: "NPU Intel não detectada"
+  npu_not_found_desc: |
+    A NPU Intel não foi detectada neste sistema.
+
+    O Bacchus requer uma NPU Intel (Unidade de Processamento Neural)
+    para inferência de modelos. Isso está disponível em processadores
+    Intel Core Ultra (Meteor Lake, Lunar Lake).
+
+    A aplicação continuará, mas a funcionalidade de chat
+    não estará disponível.
+  model_error: "Falha ao carregar modelo"
+  model_error_desc: "Detalhes foram gravados em:"
+  document_error: "Falha ao processar documento"
+  mcp_error: "Erro no servidor MCP"
+
+dialogs:
+  ok: "OK"
+  cancel: "Cancelar"
+  remove: "Remover"
+  delete: "Excluir"
+
+capability:
+  use: "Usar"
+  ignore: "Ignorar"
+  execute: "Executar"
+  confirm_title: "Confirmar Uso de Ferramenta"
+
+about:
+  title: "Sobre o Bacchus"
+  description: |
+    Bacchus v0.1.0
+
+    Aplicação de Chat com LLM Local
+    Desenvolvido com OpenVINO
+
+    © 2025
+
+first_launch:
+  welcome: "Bem-vindo ao Bacchus"
+  choose_language: "Escolha seu idioma:"
+  no_models: "Nenhum modelo de chat encontrado."
+  download_prompt: "Para começar, por favor baixe pelo menos um modelo de chat."
+  open_model_settings: "Abrir Configurações de Modelos"
+
+system_prompts:
+  default: |
+    Você é Bacchus, um assistente de IA prestativo rodando localmente no computador do usuário. Responda às perguntas de forma clara e concisa. Se você usar informações de um documento anexado, cite a fonte específica. Se você não souber algo ou estiver incerto, diga isso honestamente. Seja útil mas evite verbosidade desnecessária.
