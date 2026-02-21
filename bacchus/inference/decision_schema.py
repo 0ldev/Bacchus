@@ -89,6 +89,87 @@ def create_decision_config(
     return config
 
 
+def build_action_schema(available_tools: List[str]) -> Dict[str, Any]:
+    """
+    Schema that decides action + tool name only — no arguments.
+
+    Used as phase 1 of the two-phase tool call flow so the argument budget
+    can be set based on which tool was chosen.
+    """
+    return {
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["tool_call"]},
+                    "tool": {"type": "string", "enum": available_tools},
+                },
+                "required": ["action", "tool"],
+                "additionalProperties": False,
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["respond"]},
+                },
+                "required": ["action"],
+                "additionalProperties": False,
+            },
+        ]
+    }
+
+
+def create_action_config(
+    available_tools: List[str],
+    max_tokens: int = 256,
+) -> ov_genai.GenerationConfig:
+    """GenerationConfig for phase 1: decide action + tool name only."""
+    schema = build_action_schema(available_tools)
+    config = ov_genai.GenerationConfig()
+    config.max_new_tokens = max_tokens
+    config.temperature = 0.1
+    structured_config = ov_genai.StructuredOutputConfig()
+    structured_config.json_schema = json.dumps(schema)
+    config.structured_output_config = structured_config
+    logger.info(f"Created action schema with {len(available_tools)} tools")
+    return config
+
+
+def create_arguments_config(
+    max_tokens: int,
+    tool_schema: Optional[Dict[str, Any]] = None,
+) -> ov_genai.GenerationConfig:
+    """GenerationConfig for phase 2: generate tool arguments constrained by the tool's inputSchema.
+
+    Args:
+        max_tokens: Token budget for argument generation.
+        tool_schema: The tool's inputSchema from MCP (e.g. {"type": "object", "properties": {...}}).
+                     Falls back to bare {"type": "object"} if not provided.
+    """
+    schema = tool_schema if tool_schema else {"type": "object"}
+    config = ov_genai.GenerationConfig()
+    config.max_new_tokens = max_tokens
+    config.temperature = 0.1
+    structured_config = ov_genai.StructuredOutputConfig()
+    structured_config.json_schema = json.dumps(schema)
+    config.structured_output_config = structured_config
+    logger.info(f"Created arguments schema (max_tokens={max_tokens}, tool_schema={'provided' if tool_schema else 'generic'})")
+    return config
+
+
+def parse_action(output: str) -> Dict[str, Any]:
+    """Parse phase-1 output: just action and optional tool name."""
+    try:
+        data = json.loads(output.strip())
+        action = data.get("action", "respond")
+        if action == "tool_call":
+            return {"action": "tool_call", "tool": data.get("tool", "")}
+        return {"action": "respond"}
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse action output: {e}")
+        return {"action": "respond"}
+
+
 def parse_decision(output: str) -> Dict[str, Any]:
     """
     Parse decision output from structured generation.

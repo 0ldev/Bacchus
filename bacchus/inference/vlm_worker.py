@@ -27,6 +27,7 @@ class VLMInferenceWorker(QThread):
     generation_completed = pyqtSignal(str)   # Emits full response text
     generation_failed = pyqtSignal(str)       # Emits error message
     image_described = pyqtSignal(int, str)    # Emits (message_id, description) after auto-describe
+    token_generated = pyqtSignal(str)         # Emits each token (streaming response phase only)
 
     def __init__(
         self,
@@ -36,6 +37,7 @@ class VLMInferenceWorker(QThread):
         max_tokens: int = 512,
         temperature: float = 0.7,
         generation_config: Optional[Any] = None,
+        streaming: bool = False,
         parent=None,
     ):
         """
@@ -51,6 +53,7 @@ class VLMInferenceWorker(QThread):
             generation_config: Optional pre-configured GenerationConfig (e.g. decision
                                schema for structured tool-call decisions).  When provided,
                                it is used for the final generate() call only.
+            streaming: If True, emit token_generated for each decoded token (plain gen only).
             parent: Parent QObject.
         """
         super().__init__(parent)
@@ -60,6 +63,7 @@ class VLMInferenceWorker(QThread):
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.generation_config = generation_config
+        self.streaming = streaming
 
     # ------------------------------------------------------------------
     # helpers
@@ -220,5 +224,10 @@ class VLMInferenceWorker(QThread):
         generate_kwargs: dict = {"generation_config": final_config}
         if imgs:
             generate_kwargs["image"] = imgs[0]
+        if self.streaming:
+            def _streamer(token: str) -> bool:
+                self.token_generated.emit(token)
+                return False
+            generate_kwargs["streamer"] = _streamer
         result = self.vlm_pipeline.generate(current.content or "", **generate_kwargs)
         return result.texts[0]

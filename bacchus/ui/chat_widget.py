@@ -332,6 +332,11 @@ class ChatWidget(QWidget):
         # Keep references for copy-all
         self._message_widgets: List[MessageWidget] = []
 
+        # Streaming bubble state
+        self._streaming_label: Optional[QLabel] = None
+        self._streaming_wrapper: Optional[QWidget] = None
+        self._streaming_text: str = ""
+
         # Make widget focusable to receive Ctrl+A
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
 
@@ -448,6 +453,65 @@ class ChatWidget(QWidget):
 
         self.container_layout.addWidget(wrapper)
 
+    def begin_streaming(self) -> None:
+        """Add a placeholder assistant bubble for streaming output."""
+        # Remove any previous streaming bubble
+        self._clear_streaming_bubble()
+
+        palette = _BUBBLE_COLORS.get(self._theme, _BUBBLE_COLORS["light"])
+        colors = palette.get("assistant", palette[next(iter(palette))])
+        bg, text_color = colors["bg"], colors["text"]
+
+        self._streaming_text = ""
+        self._streaming_label = QLabel("▍")  # blinking-cursor placeholder
+        self._streaming_label.setWordWrap(True)
+        self._streaming_label.setTextFormat(Qt.TextFormat.PlainText)
+        self._streaming_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self._streaming_label.setStyleSheet(
+            f"color: {text_color}; background: transparent; padding: 0;"
+        )
+
+        bubble = QFrame()
+        bubble.setFrameShape(QFrame.Shape.NoFrame)
+        bubble.setStyleSheet(f"""
+            QFrame {{
+                background-color: {bg};
+                border-radius: 14px;
+            }}
+        """)
+        bubble_layout = QVBoxLayout(bubble)
+        bubble_layout.setContentsMargins(14, 10, 14, 10)
+        bubble_layout.addWidget(self._streaming_label)
+
+        self._streaming_wrapper = QWidget()
+        h = QHBoxLayout(self._streaming_wrapper)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(0)
+        h.addWidget(bubble, 3)
+        h.addStretch(1)
+
+        self.container_layout.addWidget(self._streaming_wrapper)
+        QTimer.singleShot(50, self._scroll_to_bottom)
+
+    def append_streaming_token(self, token: str) -> None:
+        """Append a token to the streaming bubble and scroll."""
+        if self._streaming_label is None:
+            return
+        self._streaming_text += token
+        self._streaming_label.setText(self._streaming_text + "▍")
+        if self._should_auto_scroll:
+            QTimer.singleShot(0, self._scroll_to_bottom)
+
+    def _clear_streaming_bubble(self) -> None:
+        """Remove the streaming placeholder bubble if present."""
+        if self._streaming_wrapper is not None:
+            self._streaming_wrapper.deleteLater()
+            self._streaming_wrapper = None
+            self._streaming_label = None
+            self._streaming_text = ""
+
     def load_conversation(self, conversation_id: int):
         """
         Load and display messages for a conversation.
@@ -458,6 +522,7 @@ class ChatWidget(QWidget):
         logger.info(f"Loading conversation {conversation_id} into chat widget")
 
         self._current_conversation_id = conversation_id
+        self._clear_streaming_bubble()
         self._clear_messages()
 
         messages = self.database.get_conversation_messages(conversation_id)

@@ -80,11 +80,18 @@ class InferenceWorker(QThread):
                 else:
                     config.do_sample = False
 
-            # Generate (non-streaming for now)
             logger.info("Starting generation on NPU...")
 
+            def _streamer(token: str) -> bool:
+                if self._cancelled:
+                    return True
+                self.token_generated.emit(token)
+                return False
+
             try:
-                result = self.llm_pipeline.generate(self.prompt, config)
+                # Stream tokens when not using structured output (response phase)
+                streamer = _streamer if self.generation_config is None else None
+                result = self.llm_pipeline.generate(self.prompt, config, streamer=streamer)
             except Exception as gen_error:
                 # If structured generation fails, try without it
                 if self.generation_config is not None:

@@ -98,6 +98,9 @@ class MainWindow(QMainWindow):
         self._tool_iteration_count: int = 0  # Track tool calling iterations
         self._max_tool_iterations: int = 5  # Prevent infinite tool loops
         self._seen_tool_calls: set = set()  # (tool_name, args_hash) pairs to detect duplicates
+        self._in_response_phase: bool = False   # True: plain streaming response phase
+        self._in_argument_phase: bool = False   # True: generating tool arguments
+        self._pending_tool_name: str = ""       # Tool chosen in action phase, awaiting args
         
         # Update UI based on model state
         if model_manager:
@@ -428,7 +431,10 @@ class MainWindow(QMainWindow):
         # Clear reference when closed
         dialog.finished.connect(lambda: setattr(self, '_settings_dialog', None))
         
-        dialog.exec()
+        # Use show() (non-blocking) so only one Qt event loop is active.
+        # exec() creates a nested event loop that can deadlock the NPU driver
+        # which marshals Win32 messages back to the main thread during compilation.
+        dialog.show()
     
     def _on_model_load_started(self, model_folder_name: str) -> None:
         """Handle model load beginning — lock the send button and animate the status bar."""
@@ -527,6 +533,9 @@ class MainWindow(QMainWindow):
         # Reset tool iteration state for new user message
         self._tool_iteration_count = 0
         self._seen_tool_calls = set()
+        self._in_response_phase = False
+        self._in_argument_phase = False
+        self._pending_tool_name = ""
 
         # Collect attached image (VLM mode) and copy to permanent storage
         image_path: Optional[str] = None
@@ -879,12 +888,40 @@ class MainWindow(QMainWindow):
 
             # Build decision-schema generation config — same logic as the LLM path below.
             # full system_message is passed (16k context has plenty of room).
+            # Three-phase generation:
+            #   Action phase  — small budget, picks action + tool name only
+            #   Argument phase — budget scales with tool (large for file writes)
+            #   Response phase — full budget, plain streaming generation
+            _ACTION_MAX_TOKENS = 256
+            _FILE_WRITE_TOOLS = {"write_file", "edit_file"}
+            _FILE_ARG_TOKENS = 16384
+            _DEFAULT_ARG_TOKENS = 2048
+
             vlm_generation_config = None
             last_msg = messages[-1] if messages else None
-            if last_msg and last_msg.role in ("user", "system"):
+            if self._in_response_phase:
+                vlm_generation_config = None
+                logger.info("VLM response phase: plain streaming generation")
+            elif self._in_argument_phase:
+                from bacchus.inference.decision_schema import create_arguments_config
+                arg_tokens = (
+                    _FILE_ARG_TOKENS if self._pending_tool_name in _FILE_WRITE_TOOLS
+                    else _DEFAULT_ARG_TOKENS
+                )
+                tool_schema = self._get_tool_schema(self._pending_tool_name)
+                vlm_generation_config = create_arguments_config(
+                    max_tokens=min(arg_tokens, max_new_tokens),
+                    tool_schema=tool_schema,
+                )
+                logger.info(
+                    f"VLM argument phase for '{self._pending_tool_name}' "
+                    f"(max_tokens={min(arg_tokens, max_new_tokens)}, "
+                    f"schema={'tool' if tool_schema else 'generic'})"
+                )
+            elif last_msg and last_msg.role in ("user", "system"):
                 is_last_iteration = self._tool_iteration_count >= self._max_tool_iterations - 1
                 if not is_last_iteration:
-                    from bacchus.inference.decision_schema import create_decision_config
+                    from bacchus.inference.decision_schema import create_action_config
 
                     tool_names = []
                     if self.mcp_manager:
@@ -894,10 +931,10 @@ class MainWindow(QMainWindow):
                                     tool_names.append(tool.name)
 
                     if tool_names:
-                        vlm_generation_config = create_decision_config(
-                            tool_names, max_tokens=max_new_tokens
+                        vlm_generation_config = create_action_config(
+                            tool_names, max_tokens=min(_ACTION_MAX_TOKENS, max_new_tokens)
                         )
-                        logger.info(f"VLM using decision schema with {len(tool_names)} tools (iteration {self._tool_iteration_count + 1}/{self._max_tool_iterations})")
+                        logger.info(f"VLM action phase with {len(tool_names)} tools (iteration {self._tool_iteration_count + 1}/{self._max_tool_iterations})")
                     else:
                         logger.info("No tools available for VLM, using plain generation")
                 else:
@@ -911,6 +948,7 @@ class MainWindow(QMainWindow):
                 max_tokens=max_new_tokens,
                 temperature=0.7,
                 generation_config=vlm_generation_config,
+                streaming=self._in_response_phase,
             )
 
             # VLM context accounting (no trim — full history replayed via KV-cache)
@@ -930,21 +968,42 @@ class MainWindow(QMainWindow):
             self._inference_conversation_id = self._current_conversation_id
 
             self._inference_worker.image_described.connect(self._on_image_described)
+            self._inference_worker.token_generated.connect(self._on_token_generated)
             self._inference_worker.generation_completed.connect(self._on_generation_completed)
             self._inference_worker.generation_failed.connect(self._on_generation_failed)
             self._inference_worker.start()
-            logger.info(f"VLM inference worker started (max_tokens={max_new_tokens})")
+            logger.info(f"VLM inference worker started (max_tokens={max_new_tokens}, streaming={self._in_response_phase})")
             return
-        # For initial response: use decision schema to force valid tool call or response
-        # For continuation: use regular generation or citation schema
+        _ACTION_MAX_TOKENS = 256
+        _FILE_WRITE_TOOLS = {"write_file", "edit_file"}
+        _FILE_ARG_TOKENS = 16384
+        _DEFAULT_ARG_TOKENS = 2048
+
         generation_config = None
         last_message = formatted_messages[-1] if formatted_messages else None
 
-        if last_message and last_message["role"] in ("user", "system"):
+        if self._in_response_phase:
+            generation_config = None  # Plain streaming
+        elif self._in_argument_phase:
+            from bacchus.inference.decision_schema import create_arguments_config
+            arg_tokens = (
+                _FILE_ARG_TOKENS if self._pending_tool_name in _FILE_WRITE_TOOLS
+                else _DEFAULT_ARG_TOKENS
+            )
+            tool_schema = self._get_tool_schema(self._pending_tool_name)
+            generation_config = create_arguments_config(
+                max_tokens=min(arg_tokens, max_new_tokens),
+                tool_schema=tool_schema,
+            )
+            logger.info(
+                f"LLM argument phase for '{self._pending_tool_name}' "
+                f"(max_tokens={min(arg_tokens, max_new_tokens)}, "
+                f"schema={'tool' if tool_schema else 'generic'})"
+            )
+        elif last_message and last_message["role"] in ("user", "system"):
             is_last_iteration = self._tool_iteration_count >= self._max_tool_iterations - 1
             if not is_last_iteration:
-                # Allow chaining: offer tool choice via decision schema
-                from bacchus.inference.decision_schema import create_decision_config
+                from bacchus.inference.decision_schema import create_action_config
 
                 tool_names = []
                 if self.mcp_manager:
@@ -954,8 +1013,10 @@ class MainWindow(QMainWindow):
                                 tool_names.append(tool.name)
 
                 if tool_names:
-                    generation_config = create_decision_config(tool_names, max_tokens=max_new_tokens)
-                    logger.info(f"Using decision schema with {len(tool_names)} tools (iteration {self._tool_iteration_count + 1}/{self._max_tool_iterations})")
+                    generation_config = create_action_config(
+                        tool_names, max_tokens=min(_ACTION_MAX_TOKENS, max_new_tokens)
+                    )
+                    logger.info(f"LLM action phase with {len(tool_names)} tools (iteration {self._tool_iteration_count + 1}/{self._max_tool_iterations})")
                 else:
                     logger.info("No tools available, using plain generation")
             else:
@@ -999,12 +1060,10 @@ class MainWindow(QMainWindow):
             logger.warning(f"Failed to store image description for message {message_id}: {e}")
 
     def _on_token_generated(self, token: str):
-        """Handle token generation (streaming)."""
-        # Accumulate response
+        """Handle token generation (streaming) — update the live bubble in the chat widget."""
         self._current_response += token
-        
-        # TODO: Update chat widget with streaming response
-        # For now, just accumulate
+        if self._current_conversation_id == self._inference_conversation_id:
+            self.chat_widget.append_streaming_token(token)
     
     def _strip_thinking_tags(self, response: str) -> str:
         """
@@ -1020,178 +1079,14 @@ class MainWindow(QMainWindow):
         cleaned = re.sub(r'\n{3,}', '\n\n', cleaned.strip())
         return cleaned
 
-    def _on_generation_completed(self, response: str):
-        """Handle generation completion and autonomous tool execution."""
-        logger.info(f"Generation completed, length: {len(response)} chars")
-
-        # Strip thinking tags from reasoning models (DeepSeek R1, etc.)
-        if self.model_manager:
-            model_folder = self.model_manager.get_current_chat_model() or ""
-            if "deepseek" in model_folder.lower() or "r1" in model_folder.lower():
-                original_len = len(response)
-                response = self._strip_thinking_tags(response)
-                if len(response) < original_len:
-                    logger.info(f"Stripped thinking tags, {original_len} -> {len(response)} chars")
-
-        # Check if this is a structured decision output (from decision schema)
-        from bacchus.inference.decision_schema import parse_decision
-        from bacchus.inference.autonomous_tools import execute_tool_call, format_tool_result, ToolCall
-
-        decision = parse_decision(response)
-
-        if decision["action"] == "tool_call" and self._tool_iteration_count < self._max_tool_iterations:
-            # LLM wants to use a tool via structured decision!
-            tool_name = decision["tool"]
-            arguments = decision["arguments"]
-
-            # Detect duplicate calls (same tool + same args) to break infinite loops
-            import hashlib
-            call_key = (tool_name, hashlib.md5(json.dumps(arguments, sort_keys=True).encode()).hexdigest())
-            if call_key in self._seen_tool_calls:
-                logger.warning(f"Duplicate tool call detected: {tool_name} with same args — forcing summary")
-                response = decision.get("response", f"[Searched for information and found results above.]")
-                decision = {"action": "respond", "response": response}
-                # fall through to final response handling below
-            else:
-                self._seen_tool_calls.add(call_key)
-                logger.info(f"Tool call detected (structured): {tool_name} (iteration {self._tool_iteration_count + 1}/{self._max_tool_iterations})")
-                self._tool_iteration_count += 1
-
-            # Create ToolCall object
-            tool_call = ToolCall(
-                tool_name=tool_name,
-                arguments=arguments,
-                raw_text=response
-            )
-
-            # Save the tool request to database (as JSON for clarity)
-            tool_json = json.dumps({"tool": tool_name, "arguments": arguments}, indent=2)
-            if self._inference_conversation_id is not None:
-                self.database.add_message(
-                    conversation_id=self._inference_conversation_id,
-                    role="assistant",
-                    content=tool_json,
-                    mcp_calls=[{"tool": tool_name, "params": arguments}]
-                )
-
-            # Check permission before executing
-            if self.mcp_manager:
-                permission = self._check_tool_permission(tool_name, arguments)
-
-                if permission == "deny":
-                    # User denied — inject a denial message and let LLM respond
-                    deny_msg = f"Permission denied by user for {tool_name}."
-                    formatted_result = format_tool_result(tool_name, False, deny_msg)
-                    if self._inference_conversation_id is not None:
-                        self.database.add_message(
-                            conversation_id=self._inference_conversation_id,
-                            role="system",
-                            content=formatted_result,
-                            mcp_calls=[{"tool": tool_name, "params": arguments,
-                                        "result": deny_msg, "success": False}]
-                        )
-                    if self._current_conversation_id == self._inference_conversation_id:
-                        self.chat_widget.load_conversation(self._current_conversation_id)
-                    if self._inference_worker:
-                        self._inference_worker.deleteLater()
-                        self._inference_worker = None
-                    conversation = self.database.get_conversation(self._inference_conversation_id)
-                    if conversation:
-                        self._start_inference(conversation)
-                    return
-
-                elif permission == "sandbox":
-                    # Run in OS-level sandbox
-                    from bacchus.sandbox.runner import SandboxRunner
-                    from bacchus.constants import SANDBOX_DIR
-                    runner = SandboxRunner(SANDBOX_DIR)
-
-                    if tool_name == "execute_command":
-                        success, result = runner.run_command(arguments.get("command", ""))
-                    elif tool_name in ("write_file", "edit_file", "create_directory"):
-                        sandboxed_args = dict(arguments)
-                        if "path" in sandboxed_args:
-                            sandboxed_args["path"] = runner.sandbox_path(sandboxed_args["path"])
-                        # Ensure the filesystem server allows writes into SANDBOX_DIR
-                        self.mcp_manager.ensure_path_allowed(
-                            "filesystem", str(SANDBOX_DIR), persist=False
-                        )
-                        sandboxed_call = ToolCall(
-                            tool_name=tool_name,
-                            arguments=sandboxed_args,
-                            raw_text=response
-                        )
-                        success, result = execute_tool_call(sandboxed_call, self.mcp_manager)
-                    else:
-                        success, result = execute_tool_call(tool_call, self.mcp_manager)
-
-                    logger.info(
-                        f"Sandboxed tool execution {'succeeded' if success else 'failed'}"
-                    )
-                    formatted_result = format_tool_result(
-                        tool_name, success, f"[SANDBOXED] {result}"
-                    )
-
-                else:
-                    # Normal execution
-                    success, result = execute_tool_call(tool_call, self.mcp_manager)
-                    logger.info(
-                        f"Tool execution {'succeeded' if success else 'failed'}, "
-                        f"result length: {len(result)} chars"
-                    )
-                    formatted_result = format_tool_result(tool_name, success, result)
-
-                # Add tool result to database as system message (with structured mcp_calls for UI)
-                if self._inference_conversation_id is not None:
-                    self.database.add_message(
-                        conversation_id=self._inference_conversation_id,
-                        role="system",
-                        content=formatted_result,
-                        mcp_calls=[{"tool": tool_name, "params": arguments,
-                                    "result": result, "success": success}]
-                    )
-
-                # Reload conversation to show tool call and result
-                if self._current_conversation_id == self._inference_conversation_id:
-                    self.chat_widget.load_conversation(self._current_conversation_id)
-
-                # Clean up previous worker
-                if self._inference_worker:
-                    self._inference_worker.deleteLater()
-                    self._inference_worker = None
-
-                # Start another generation with tool result
-                # Get the conversation object to restart inference
-                conversation = self.database.get_conversation(self._inference_conversation_id)
-                if conversation:
-                    self._start_inference(conversation)
-                    return  # Don't complete yet - wait for next generation
-                else:
-                    logger.error(f"Failed to get conversation {self._inference_conversation_id} for tool iteration")
-                    # Fall through to normal completion
-
-            else:
-                logger.warning("No MCP manager available for tool execution")
-                # Fall through to normal completion
-
-        elif decision["action"] == "tool_call" and self._tool_iteration_count >= self._max_tool_iterations:
-            # Hit iteration limit
-            logger.warning(f"Max tool iterations ({self._max_tool_iterations}) reached, stopping")
-            error_msg = f"[System: Maximum tool iterations reached. Response may be incomplete.]"
-            # Extract the response from decision or use error message
-            response = decision.get("response", error_msg)
-
-        elif decision["action"] == "respond":
-            # Direct response - extract the text
-            logger.info("Direct response (no tool needed)")
-            response = decision.get("response", response)
-
-        # No tool call or max iterations reached - this is the final response
-        logger.info(f"Final response (action={decision['action']})")
-
-        # Reset tool iteration state
+    def _finalize_response(self, response: str) -> None:
+        """Save the final assistant response to the DB and update the UI."""
+        # Reset all iteration state
         self._tool_iteration_count = 0
         self._seen_tool_calls = set()
+        self._in_response_phase = False
+        self._in_argument_phase = False
+        self._pending_tool_name = ""
 
         # Save final response using the captured conversation ID
         if self._inference_conversation_id is not None:
@@ -1207,7 +1102,6 @@ class MainWindow(QMainWindow):
         if self._current_conversation_id == self._inference_conversation_id:
             self.chat_widget.load_conversation(self._current_conversation_id)
         else:
-            # User switched conversations - just refresh sidebar
             self.sidebar.refresh_conversations()
 
         # Re-enable input
@@ -1221,6 +1115,202 @@ class MainWindow(QMainWindow):
         self._current_response = ""
 
         logger.info("Generation cycle complete")
+
+    def _on_generation_completed(self, response: str):
+        """Handle generation completion and autonomous tool execution."""
+        logger.info(f"Generation completed, length: {len(response)} chars")
+
+        # Strip thinking tags from reasoning models (DeepSeek R1, etc.)
+        if self.model_manager:
+            model_folder = self.model_manager.get_current_chat_model() or ""
+            if "deepseek" in model_folder.lower() or "r1" in model_folder.lower():
+                original_len = len(response)
+                response = self._strip_thinking_tags(response)
+                if len(response) < original_len:
+                    logger.info(f"Stripped thinking tags, {original_len} -> {len(response)} chars")
+
+        # Response phase: this IS the final user-facing text — skip decision parsing.
+        if self._in_response_phase:
+            logger.info("Response phase complete — finalizing")
+            self._finalize_response(response)
+            return
+
+        from bacchus.inference.autonomous_tools import execute_tool_call, format_tool_result, ToolCall
+
+        # Argument phase: response is a JSON object of tool arguments.
+        if self._in_argument_phase:
+            self._in_argument_phase = False
+            tool_name = self._pending_tool_name
+            self._pending_tool_name = ""
+            try:
+                arguments = json.loads(response.strip())
+                if not isinstance(arguments, dict):
+                    raise ValueError("arguments must be a JSON object")
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.error(f"Failed to parse tool arguments: {e} — raw: {response[:200]}")
+                self._finalize_response("[Error: could not parse tool arguments.]")
+                return
+            logger.info(f"Argument phase complete: {tool_name}({list(arguments.keys())})")
+            self._dispatch_tool_call(tool_name, arguments, response)
+            return
+
+        # Action phase: pick tool_call vs respond (no arguments yet).
+        from bacchus.inference.decision_schema import parse_action
+        action = parse_action(response)
+
+        if action["action"] == "tool_call" and self._tool_iteration_count < self._max_tool_iterations:
+            tool_name = action["tool"]
+
+            # Duplicate detection
+            import hashlib
+            call_key = (tool_name, hashlib.md5(json.dumps({}, sort_keys=True).encode()).hexdigest())
+            # We don't have args yet to hash — use tool name only for now
+            call_key = tool_name  # will refine after args are generated
+
+            logger.info(f"Action phase: tool_call={tool_name} — starting argument phase")
+            if self._inference_worker:
+                self._inference_worker.deleteLater()
+                self._inference_worker = None
+            self._in_argument_phase = True
+            self._pending_tool_name = tool_name
+            conversation = self.database.get_conversation(self._inference_conversation_id)
+            if conversation:
+                self._start_inference(conversation)
+                return
+            logger.error("Could not get conversation for argument phase")
+            self._finalize_response("[Error: could not start argument generation.]")
+            return
+
+        if action["action"] == "tool_call" and self._tool_iteration_count >= self._max_tool_iterations:
+            logger.warning(f"Max tool iterations ({self._max_tool_iterations}) reached")
+            self._finalize_response("[System: Maximum tool iterations reached. Response may be incomplete.]")
+            return
+
+        if action["action"] == "respond":
+            # Start response phase with full streaming plain gen.
+            logger.info("Action phase: respond — starting streaming response phase")
+            if self._inference_worker:
+                self._inference_worker.deleteLater()
+                self._inference_worker = None
+            self._in_response_phase = True
+            if self._current_conversation_id == self._inference_conversation_id:
+                self.chat_widget.begin_streaming()
+            conversation = self.database.get_conversation(self._inference_conversation_id)
+            if conversation:
+                self._start_inference(conversation)
+                return
+            logger.warning("Could not restart inference for response phase — no conversation")
+            self._in_response_phase = False
+        return
+
+    def _dispatch_tool_call(self, tool_name: str, arguments: dict, raw_text: str) -> None:
+        """Execute a tool call (after arguments have been generated) and continue the loop."""
+        if self._tool_iteration_count < self._max_tool_iterations:
+            pass  # Fall through to check for duplicate
+
+        from bacchus.inference.autonomous_tools import execute_tool_call, format_tool_result, ToolCall
+
+        import hashlib
+        call_key = (tool_name, hashlib.md5(json.dumps(arguments, sort_keys=True).encode()).hexdigest())
+        if call_key in self._seen_tool_calls:
+            logger.warning(f"Duplicate tool call: {tool_name} — forcing response phase")
+            if self._inference_worker:
+                self._inference_worker.deleteLater()
+                self._inference_worker = None
+            self._in_response_phase = True
+            if self._current_conversation_id == self._inference_conversation_id:
+                self.chat_widget.begin_streaming()
+            conversation = self.database.get_conversation(self._inference_conversation_id)
+            if conversation:
+                self._start_inference(conversation)
+            return
+        self._seen_tool_calls.add(call_key)
+        self._tool_iteration_count += 1
+
+        tool_call = ToolCall(tool_name=tool_name, arguments=arguments, raw_text=raw_text)
+
+        tool_json = json.dumps({"tool": tool_name, "arguments": arguments}, indent=2)
+        if self._inference_conversation_id is not None:
+            self.database.add_message(
+                conversation_id=self._inference_conversation_id,
+                role="assistant",
+                content=tool_json,
+                mcp_calls=[{"tool": tool_name, "params": arguments}]
+            )
+
+        if not self.mcp_manager:
+            logger.warning("No MCP manager — cannot execute tool")
+            self._finalize_response(f"[Tool {tool_name} could not be executed: no MCP manager.]")
+            return
+
+        permission = self._check_tool_permission(tool_name, arguments)
+
+        if permission == "deny":
+            deny_msg = f"Permission denied by user for {tool_name}."
+            formatted_result = format_tool_result(tool_name, False, deny_msg)
+            if self._inference_conversation_id is not None:
+                self.database.add_message(
+                    conversation_id=self._inference_conversation_id,
+                    role="system",
+                    content=formatted_result,
+                    mcp_calls=[{"tool": tool_name, "params": arguments,
+                                "result": deny_msg, "success": False}]
+                )
+            if self._current_conversation_id == self._inference_conversation_id:
+                self.chat_widget.load_conversation(self._current_conversation_id)
+            if self._inference_worker:
+                self._inference_worker.deleteLater()
+                self._inference_worker = None
+            conversation = self.database.get_conversation(self._inference_conversation_id)
+            if conversation:
+                self._start_inference(conversation)
+            return
+
+        if permission == "sandbox":
+            from bacchus.sandbox.runner import SandboxRunner
+            from bacchus.constants import SANDBOX_DIR
+            runner = SandboxRunner(SANDBOX_DIR)
+            if tool_name == "execute_command":
+                success, result = runner.run_command(arguments.get("command", ""))
+            elif tool_name in ("write_file", "edit_file", "create_directory"):
+                sandboxed_args = dict(arguments)
+                if "path" in sandboxed_args:
+                    sandboxed_args["path"] = runner.sandbox_path(sandboxed_args["path"])
+                self.mcp_manager.ensure_path_allowed("filesystem", str(SANDBOX_DIR), persist=False)
+                sandboxed_call = ToolCall(
+                    tool_name=tool_name, arguments=sandboxed_args, raw_text=raw_text
+                )
+                success, result = execute_tool_call(sandboxed_call, self.mcp_manager)
+            else:
+                success, result = execute_tool_call(tool_call, self.mcp_manager)
+            formatted_result = format_tool_result(tool_name, success, f"[SANDBOXED] {result}")
+        else:
+            success, result = execute_tool_call(tool_call, self.mcp_manager)
+            logger.info(f"Tool '{tool_name}' {'succeeded' if success else 'failed'}, {len(result)} chars")
+            formatted_result = format_tool_result(tool_name, success, result)
+
+        if self._inference_conversation_id is not None:
+            self.database.add_message(
+                conversation_id=self._inference_conversation_id,
+                role="system",
+                content=formatted_result,
+                mcp_calls=[{"tool": tool_name, "params": arguments,
+                            "result": result, "success": success}]
+            )
+
+        if self._current_conversation_id == self._inference_conversation_id:
+            self.chat_widget.load_conversation(self._current_conversation_id)
+
+        if self._inference_worker:
+            self._inference_worker.deleteLater()
+            self._inference_worker = None
+
+        conversation = self.database.get_conversation(self._inference_conversation_id)
+        if conversation:
+            self._start_inference(conversation)
+            return
+        logger.error(f"Failed to get conversation {self._inference_conversation_id} for next iteration")
+
     
     _SAFE_TOOLS = {"search_web", "fetch_webpage", "read_file", "list_directory"}
     _RISKY_TOOLS = {"write_file", "edit_file", "create_directory", "execute_command"}
@@ -1228,6 +1318,17 @@ class MainWindow(QMainWindow):
         "search_web": "always_allow",
         "fetch_webpage": "always_allow",
     }
+
+    def _get_tool_schema(self, tool_name: str) -> Optional[dict]:
+        """Return the MCP inputSchema for *tool_name*, or None if not found."""
+        if not self.mcp_manager:
+            return None
+        for server in self.mcp_manager.list_servers():
+            if server.status == "running" and server.client:
+                for tool in server.client._tools:
+                    if tool.name == tool_name:
+                        return tool.parameters or None
+        return None
 
     def _check_tool_permission(self, tool_name: str, arguments: dict) -> str:
         """

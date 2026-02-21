@@ -72,7 +72,8 @@ class SettingsDialog(QDialog):
         
         self.setWindowTitle(locales.get_string("settings.title", "Settings"))
         self.setFixedSize(700, 580)
-        self.setModal(True)
+        # Non-modal: shown with show() so the main event loop keeps running during
+        # background model loads (avoids nested-event-loop / NPU Win32 deadlock).
         
         # Load settings
         self._settings = load_settings()
