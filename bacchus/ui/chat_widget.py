@@ -126,15 +126,23 @@ class MessageWidget(QFrame):
             if _Path(img_path).exists():
                 pixmap = QPixmap(img_path)
                 if not pixmap.isNull():
-                    pixmap = pixmap.scaledToWidth(
-                        280, Qt.TransformationMode.SmoothTransformation
+                    pixmap = pixmap.scaled(
+                        180, 120,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
                     )
                     img_label = QLabel()
                     img_label.setPixmap(pixmap)
                     img_label.setStyleSheet(
                         "border-radius: 6px; background: transparent;"
                     )
-                    img_label.setToolTip(str(_Path(img_path).name))
+                    img_label.setCursor(Qt.CursorShape.PointingHandCursor)
+                    img_label.setToolTip(
+                        f"{_Path(img_path).name} — click to open"
+                    )
+                    img_label.mousePressEvent = (
+                        lambda _e, p=img_path: self._open_image(p)
+                    )
                     layout.addWidget(img_label)
 
         # ── Text content ───────────────────────────────────────────────────
@@ -254,6 +262,17 @@ class MessageWidget(QFrame):
                     layout.addWidget(error_label)
 
         self.setLayout(layout)
+
+    def _open_image(self, path: str) -> None:
+        """Open image in the OS default viewer."""
+        import os
+        try:
+            os.startfile(path)  # Windows
+        except AttributeError:
+            import subprocess
+            subprocess.run(["xdg-open", path])  # Linux fallback
+        except Exception as e:
+            logger.warning(f"Failed to open image {path}: {e}")
 
     def _get_role_label(self, role: str) -> str:
         """Get display label for message role."""

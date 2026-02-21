@@ -18,11 +18,17 @@ from PyQt6.QtWidgets import (
     QLabel,
     QFileDialog,
     QMessageBox,
+    QSlider,
+    QSpinBox,
 )
 from PyQt6.QtGui import QKeyEvent, QPixmap
 
 from bacchus import locales
+from bacchus.config import load_settings, save_settings
 from bacchus.constants import SUPPORTED_DOCUMENT_EXTENSIONS
+
+# Image file extensions accepted by the attachment picker
+_IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp', '.bmp'}
 
 
 logger = logging.getLogger(__name__)
@@ -211,9 +217,10 @@ class PromptArea(QWidget):
 
         self._attached_document: Optional[str] = None
         self._attached_image_path: Optional[str] = None
-        self._is_enabled = True
-        self._has_model = False  # Track if a model is loaded
-        self._is_generating = False  # Track if model is generating
+        self._is_enabled = False  # True only when a conversation is selected
+        self._has_model = False   # True only when a model is loaded
+        self._is_generating = False  # True while model is generating
+        self._is_vlm_mode = False  # Track if current model supports vision
 
         # History management
         self._prompt_history: List[str] = []
@@ -275,27 +282,69 @@ class PromptArea(QWidget):
 
         main_layout.addLayout(info_row)
 
-        # Row 2: Input row — buttons align to bottom when input grows
+        # Row 2: Generation params bar ─────────────────────────────────────
+        gen_row = QHBoxLayout()
+        gen_row.setContentsMargins(0, 2, 0, 2)
+        gen_row.setSpacing(6)
+
+        _label_style = "font-size: 11px; color: #888888;"
+
+        temp_label = QLabel(locales.get_string("prompt.temperature", "Temp:"))
+        temp_label.setStyleSheet(_label_style)
+        gen_row.addWidget(temp_label)
+
+        self.temp_slider = QSlider(Qt.Orientation.Horizontal)
+        self.temp_slider.setRange(0, 20)   # represents 0.0–2.0 in 0.1 steps
+        self.temp_slider.setFixedWidth(90)
+        gen_row.addWidget(self.temp_slider)
+
+        self.temp_value_label = QLabel("0.7")
+        self.temp_value_label.setFixedWidth(28)
+        self.temp_value_label.setStyleSheet(_label_style)
+        gen_row.addWidget(self.temp_value_label)
+
+        gen_row.addSpacing(14)
+
+        min_label = QLabel(locales.get_string("prompt.min_tokens", "Min tokens:"))
+        min_label.setStyleSheet(_label_style)
+        gen_row.addWidget(min_label)
+
+        self.min_tokens_spin = QSpinBox()
+        self.min_tokens_spin.setRange(0, 4096)
+        self.min_tokens_spin.setSingleStep(64)
+        self.min_tokens_spin.setFixedWidth(65)
+        gen_row.addWidget(self.min_tokens_spin)
+
+        gen_row.addStretch()
+
+        # Apply a thin top separator via a container widget (hidden by default)
+        self.gen_container = QWidget()
+        self.gen_container.setStyleSheet(
+            "QWidget { border-top: 1px solid rgba(128,128,128,0.20); }"
+        )
+        self.gen_container.setLayout(gen_row)
+        self.gen_container.hide()
+        main_layout.addWidget(self.gen_container)
+
+        # Load initial values from settings
+        self._load_gen_params()
+
+        # Connect changes → save to settings immediately
+        self.temp_slider.valueChanged.connect(self._on_temp_changed)
+        self.min_tokens_spin.valueChanged.connect(self._on_min_tokens_changed)
+
+        # Row 3: Input row — buttons align to bottom when input grows
         input_row = QHBoxLayout()
         input_row.setSpacing(8)
 
-        # Add document button (aligned to bottom so it anchors when input grows)
-        self.add_doc_button = QPushButton("📎")
-        self.add_doc_button.setFixedSize(40, 40)
-        self.add_doc_button.setToolTip(
-            locales.get_string("prompt.add_document", "Add Document")
+        # Single attachment button (documents and images)
+        self.add_attachment_button = QPushButton("📎")
+        self.add_attachment_button.setFixedSize(40, 40)
+        self.add_attachment_button.setToolTip(
+            locales.get_string("prompt.add_attachment", "Attach Document or Image")
         )
-        self.add_doc_button.clicked.connect(self._on_add_document)
-        input_row.addWidget(self.add_doc_button, 0, Qt.AlignmentFlag.AlignBottom)
-        # Image attachment button (hidden by default, shown in VLM mode)
-        self.add_image_button = QPushButton("\U0001f4f7")
-        self.add_image_button.setFixedSize(40, 40)
-        self.add_image_button.setToolTip(
-            locales.get_string("prompt.attach_image", "Attach Image")
-        )
-        self.add_image_button.clicked.connect(self._on_add_image)
-        self.add_image_button.hide()
-        input_row.addWidget(self.add_image_button, 0, Qt.AlignmentFlag.AlignBottom)
+        self.add_attachment_button.clicked.connect(self._on_add_attachment)
+        input_row.addWidget(self.add_attachment_button, 0, Qt.AlignmentFlag.AlignBottom)
         # Text input
         self.text_input = MultiLineInput()
         self.text_input.send_requested.connect(self._on_send_message)
@@ -324,6 +373,26 @@ class PromptArea(QWidget):
         """)
         self.send_button.clicked.connect(self._on_send_message)
         input_row.addWidget(self.send_button, 0, Qt.AlignmentFlag.AlignBottom)
+
+        # Toggle button for generation params bar (always visible, right of Send)
+        self._gen_toggle_button = QPushButton("⚙")
+        self._gen_toggle_button.setFixedSize(32, 32)
+        self._gen_toggle_button.setCheckable(True)
+        self._gen_toggle_button.setChecked(False)
+        self._gen_toggle_button.setToolTip("Show/hide generation parameters (Temp, Min tokens)")
+        self._gen_toggle_button.setStyleSheet("""
+            QPushButton {
+                border: 1px solid #cccccc;
+                border-radius: 6px;
+                font-size: 14px;
+                color: #888888;
+                background: transparent;
+            }
+            QPushButton:hover { color: #444444; border-color: #aaaaaa; }
+            QPushButton:checked { color: #4CAF50; border-color: #4CAF50; }
+        """)
+        self._gen_toggle_button.toggled.connect(self._on_toggle_gen_params)
+        input_row.addWidget(self._gen_toggle_button, 0, Qt.AlignmentFlag.AlignBottom)
 
         main_layout.addLayout(input_row)
 
@@ -372,23 +441,41 @@ class PromptArea(QWidget):
         self.text_input.setTextCursor(cursor)
 
     def _update_send_button_state(self):
-        """Update send button enabled/disabled state."""
+        """Update enabled/placeholder state for all input widgets."""
+        # Text input and attachment are usable only when conversation + model + not generating
+        input_usable = self._is_enabled and self._has_model and not self._is_generating
+        self.text_input.setEnabled(input_usable)
+        self.add_attachment_button.setEnabled(input_usable)
+
+        # Context-aware placeholder text
+        if not self._is_enabled:
+            self.text_input.setPlaceholderText(
+                locales.get_string("chat.no_conversation",
+                                   "Select or create a conversation to start chatting")
+            )
+        elif not self._has_model:
+            self.text_input.setPlaceholderText(
+                locales.get_string("chat.no_model",
+                                   "Load a model in Settings → Models to start chatting")
+            )
+        else:
+            self.text_input.setPlaceholderText(
+                locales.get_string("chat.type_message", "Type your message...")
+            )
+
         text = self.text_input.toPlainText().strip()
         has_text = len(text) > 0
+        self.send_button.setEnabled(has_text and input_usable)
 
-        # Enable if: has text AND is enabled AND has model AND not generating
-        should_enable = (
-            has_text and
-            self._is_enabled and
-            self._has_model and
-            not self._is_generating
-        )
-        self.send_button.setEnabled(should_enable)
-
-        # Update button tooltip
-        if not self._has_model:
+        # Send button tooltip
+        if not self._is_enabled:
             self.send_button.setToolTip(
-                locales.get_string("prompt.no_model", "No model loaded. Go to Settings > Models to download a model.")
+                locales.get_string("prompt.no_conversation", "No conversation selected")
+            )
+        elif not self._has_model:
+            self.send_button.setToolTip(
+                locales.get_string("prompt.no_model",
+                                   "No model loaded. Go to Settings > Models to download a model.")
             )
         elif self._is_generating:
             self.send_button.setToolTip(
@@ -403,44 +490,95 @@ class PromptArea(QWidget):
                 locales.get_string("prompt.send", "Send message (Enter)")
             )
 
-    def _on_add_document(self):
-        """Handle add document button click."""
-        # Open file picker
+    # ── Generation params helpers ─────────────────────────────────────────────
+
+    def _load_gen_params(self) -> None:
+        """Load temperature and min_new_tokens from settings into the UI widgets."""
+        from bacchus.constants import DEFAULT_TEMPERATURE, DEFAULT_MIN_NEW_TOKENS
+        gen = load_settings().get("generation", {})
+        temp = gen.get("temperature", DEFAULT_TEMPERATURE)
+        min_tok = gen.get("min_new_tokens", DEFAULT_MIN_NEW_TOKENS)
+
+        self.temp_slider.blockSignals(True)
+        self.temp_slider.setValue(int(round(temp * 10)))
+        self.temp_slider.blockSignals(False)
+        self.temp_value_label.setText(f"{temp:.1f}")
+
+        self.min_tokens_spin.blockSignals(True)
+        self.min_tokens_spin.setValue(min_tok)
+        self.min_tokens_spin.blockSignals(False)
+
+    def _on_temp_changed(self, value: int) -> None:
+        """Handle temperature slider change — save to settings immediately."""
+        temp = value / 10.0
+        self.temp_value_label.setText(f"{temp:.1f}")
+        s = load_settings()
+        s.setdefault("generation", {})["temperature"] = temp
+        save_settings(s)
+
+    def _on_min_tokens_changed(self, value: int) -> None:
+        """Handle min_new_tokens spinbox change — save to settings immediately."""
+        s = load_settings()
+        s.setdefault("generation", {})["min_new_tokens"] = value
+        save_settings(s)
+
+    def _on_toggle_gen_params(self, checked: bool) -> None:
+        """Show or hide the generation parameters bar."""
+        self.gen_container.setVisible(checked)
+
+    # ── Attachment helpers ────────────────────────────────────────────────────
+
+    def _on_add_attachment(self) -> None:
+        """Open a unified file picker for documents and images."""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
-            locales.get_string("prompt.select_document", "Select Document"),
-            str(Path.home() / "Documents"),
-            locales.get_string("document.file_filter", "Text Files (*.txt *.md)")
+            locales.get_string("prompt.select_attachment", "Select Attachment"),
+            str(Path.home()),
+            "All Supported (*.txt *.md *.png *.jpg *.jpeg *.webp *.bmp)",
         )
 
         if not file_path:
             return  # User cancelled
 
-        # Verify extension
         path = Path(file_path)
-        if path.suffix.lower() not in SUPPORTED_DOCUMENT_EXTENSIONS:
-            QMessageBox.warning(
-                self,
-                locales.get_string("error.generic", "Error"),
-                f"Unsupported file type: {path.suffix}\n\nSupported: .txt, .md"
-            )
-            return
+        ext = path.suffix.lower()
 
-        # Set document
+        if ext in _IMAGE_EXTENSIONS:
+            # Image path
+            if not self._is_vlm_mode:
+                QMessageBox.warning(
+                    self,
+                    locales.get_string("prompt.image_not_supported", "Image not supported"),
+                    locales.get_string(
+                        "prompt.image_not_supported_msg",
+                        "The current model is text-only and cannot process images.\n"
+                        "Please attach a text document (.txt or .md) instead.",
+                    ),
+                )
+                return
+            self._attach_image(file_path)
+        else:
+            # Document path
+            if ext not in SUPPORTED_DOCUMENT_EXTENSIONS:
+                QMessageBox.warning(
+                    self,
+                    locales.get_string("error.generic", "Error"),
+                    f"Unsupported file type: {ext}\n\nSupported: .txt, .md",
+                )
+                return
+            self._attach_document(file_path)
+
+    def _attach_document(self, file_path: str) -> None:
+        """Attach a text document."""
         self._attached_document = file_path
-
-        # Update UI
+        path = Path(file_path)
         filename = path.name
         if len(filename) > 20:
             filename = filename[:17] + "..."
-
         self.document_label.setText(f"📎 {filename} ×")
         self.document_label.setToolTip(f"{path.name}\nClick × to remove")
         self.document_label.show()
-
-        # Emit signal
         self.document_attached.emit(file_path)
-
         logger.info(f"Document attached: {file_path}")
 
     def _on_remove_document(self):
@@ -487,16 +625,12 @@ class PromptArea(QWidget):
 
     def set_enabled(self, enabled: bool):
         """
-        Enable or disable input.
+        Mark whether a conversation is currently selected.
 
         Args:
-            enabled: True to enable input
+            enabled: True when a conversation is active
         """
         self._is_enabled = enabled
-        self.text_input.setEnabled(enabled)
-        self.add_doc_button.setEnabled(enabled)
-        if self.add_image_button.isVisible():
-            self.add_image_button.setEnabled(enabled)
         self._update_send_button_state()
 
     def show_notice(self, text: str, duration_ms: int = 5000) -> None:
@@ -550,10 +684,6 @@ class PromptArea(QWidget):
             generating: True if model is generating a response
         """
         self._is_generating = generating
-        self.text_input.setEnabled(not generating)
-        self.add_doc_button.setEnabled(not generating)
-        if self.add_image_button.isVisible():
-            self.add_image_button.setEnabled(not generating)
         self._update_send_button_state()
 
     def focus_input(self):
@@ -564,17 +694,16 @@ class PromptArea(QWidget):
 
     def set_vlm_mode(self, enabled: bool):
         """
-        Show or hide the image attachment button.
+        Update VLM mode flag.
 
         Called by MainWindow when a VLM model is loaded or unloaded.
+        Images attached in non-VLM mode are rejected with a warning dialog.
 
         Args:
-            enabled: True to show image button (VLM model loaded)
+            enabled: True if a vision-language model is currently loaded
         """
-        if enabled:
-            self.add_image_button.show()
-        else:
-            self.add_image_button.hide()
+        self._is_vlm_mode = enabled
+        if not enabled:
             self.clear_attached_image()  # Remove any pending image when leaving VLM mode
 
     def get_attached_image(self) -> Optional[str]:
@@ -587,27 +716,14 @@ class PromptArea(QWidget):
         self.image_label.hide()
         logger.debug("Image attachment cleared")
 
-    def _on_add_image(self):
-        """Handle image attachment button click."""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            locales.get_string("prompt.select_image", "Select Image"),
-            str(Path.home() / "Pictures"),
-            "Images (*.png *.jpg *.jpeg *.webp *.bmp)"
-        )
-
-        if not file_path:
-            return
-
+    def _attach_image(self, file_path: str) -> None:
+        """Attach an image file and show its thumbnail in the indicator."""
         self._attached_image_path = file_path
-
-        # Show a thumbnail + filename in the indicator label
         path = Path(file_path)
         filename = path.name
         if len(filename) > 20:
             filename = filename[:17] + "..."
 
-        # Try to show a small inline thumbnail
         pixmap = QPixmap(file_path)
         if not pixmap.isNull():
             thumb = pixmap.scaledToHeight(20, Qt.TransformationMode.SmoothTransformation)
@@ -616,9 +732,7 @@ class PromptArea(QWidget):
             self.image_label.setToolTip(f"{path.name}\nClick to remove")
         else:
             self.image_label.setPixmap(QPixmap())
-            self.image_label.setText(
-                f"\U0001f5bc {filename} \u00d7"
-            )
+            self.image_label.setText(f"\U0001f5bc {filename} \u00d7")
             self.image_label.setToolTip(f"{path.name}\nClick to remove")
 
         self.image_label.show()

@@ -71,7 +71,7 @@ class SettingsDialog(QDialog):
         self._initial_tab = initial_tab
         
         self.setWindowTitle(locales.get_string("settings.title", "Settings"))
-        self.setFixedSize(700, 580)
+        self.setFixedSize(700, 650)
         # Non-modal: shown with show() so the main event loop keeps running during
         # background model loads (avoids nested-event-loop / NPU Win32 deadlock).
         
@@ -314,104 +314,25 @@ class SettingsDialog(QDialog):
     
     def _create_models_tab(self) -> QWidget:
         """Create Models tab content."""
-        from bacchus.constants import CONTEXT_SIZE_OPTIONS, DEFAULT_CONTEXT_SIZE
-
         tab = QWidget()
         layout = QVBoxLayout()
+        layout.setSpacing(8)
 
-        # ── Active Model Section ────────────────────────────────────────────
-        active_group = QGroupBox(
-            locales.get_string("settings.active_model", "Active Model")
-        )
-        active_layout = QVBoxLayout()
-        active_layout.setSpacing(6)
-
-        # Currently loaded label
-        self.current_model_label = QLabel(
-            locales.get_string("settings.currently_loaded", "Currently loaded: ") + "None"
-        )
-        active_layout.addWidget(self.current_model_label)
-
-        # Model switcher row
-        switch_layout = QHBoxLayout()
-        switch_layout.addWidget(QLabel(locales.get_string("settings.switch_to", "Switch to:")))
-
-        self.model_combo = QComboBox()
-        self._populate_model_combo()
-        self.model_combo.currentIndexChanged.connect(self._on_model_selection_changed)
-        switch_layout.addWidget(self.model_combo, 1)
-
-        self.apply_model_button = QPushButton(locales.get_string("settings.apply", "Apply"))
-        self.apply_model_button.setEnabled(False)
-        self.apply_model_button.clicked.connect(self._on_apply_model)
-        switch_layout.addWidget(self.apply_model_button)
-
-        active_layout.addLayout(switch_layout)
-
-        # Context size row
-        context_layout = QHBoxLayout()
-        context_layout.addWidget(QLabel(
-            locales.get_string("settings.context_size", "Context size:")
-        ))
-
-        self.context_combo = QComboBox()
-        for size in CONTEXT_SIZE_OPTIONS:
-            self.context_combo.addItem(f"{size:,} tokens", size)
-
-        context_help = QLabel(
-            locales.get_string("settings.context_size_help",
-                               "(saved per model, applied on load)")
-        )
-        context_help.setStyleSheet("color: #888888; font-size: 11px;")
-
-        context_layout.addWidget(self.context_combo)
-        context_layout.addWidget(context_help)
-        context_layout.addStretch()
-        active_layout.addLayout(context_layout)
-
-        # Apply context limits and sync for the currently selected model
-        self._on_model_selection_changed(self.model_combo.currentIndex())
-
-        # Startup model row
-        startup_layout = QHBoxLayout()
-
-        startup_folder = self._settings.get("startup_model")
-        if startup_folder and self.model_manager:
-            startup_display = self.model_manager.get_model_display_name(startup_folder)
-        elif startup_folder:
-            startup_display = startup_folder
+        # ── Current model header ────────────────────────────────────────────
+        current_model = self.model_manager.get_current_chat_model() if self.model_manager else None
+        if current_model and self.model_manager:
+            loaded_display = self.model_manager.get_model_display_name(current_model)
         else:
-            startup_display = locales.get_string("settings.none", "None")
+            loaded_display = locales.get_string("settings.none", "None")
 
-        self.startup_model_label = QLabel(
-            locales.get_string("settings.startup_model", "Startup model: ") + startup_display
+        self.current_model_label = QLabel(
+            locales.get_string("settings.currently_loaded", "Currently loaded: ")
+            + loaded_display
         )
-        startup_layout.addWidget(self.startup_model_label, 1)
+        self.current_model_label.setStyleSheet("font-size: 12px; font-weight: 600; padding: 4px 0;")
+        layout.addWidget(self.current_model_label)
 
-        set_startup_btn = QPushButton(
-            locales.get_string("settings.set_startup", "Set as startup")
-        )
-        set_startup_btn.setFixedWidth(120)
-        set_startup_btn.clicked.connect(self._on_set_startup_model)
-        startup_layout.addWidget(set_startup_btn)
-
-        clear_startup_btn = QPushButton(
-            locales.get_string("settings.clear_startup", "Clear")
-        )
-        clear_startup_btn.setFixedWidth(60)
-        clear_startup_btn.clicked.connect(self._on_clear_startup_model)
-        startup_layout.addWidget(clear_startup_btn)
-
-        active_layout.addLayout(startup_layout)
-        active_group.setLayout(active_layout)
-        layout.addWidget(active_group)
-
-        # ── Download Manager Section ────────────────────────────────────────
-        download_group = QGroupBox(
-            locales.get_string("settings.download_models", "Download Models")
-        )
-        download_layout = QVBoxLayout()
-
+        # ── Scrollable model card list ──────────────────────────────────────
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -425,10 +346,7 @@ class SettingsDialog(QDialog):
         self.cards_layout.addStretch()
         self.cards_widget.setLayout(self.cards_layout)
         scroll.setWidget(self.cards_widget)
-        download_layout.addWidget(scroll)
-
-        download_group.setLayout(download_layout)
-        layout.addWidget(download_group)
+        layout.addWidget(scroll)
 
         tab.setLayout(layout)
         return tab
@@ -438,35 +356,34 @@ class SettingsDialog(QDialog):
         from bacchus.ui.model_card import ModelCard
         from bacchus.constants import CHAT_MODELS
 
-        # Build card list directly from constants so the two never diverge
-        models = [
-            {
-                "id": folder,
-                "display_name": info["display_name"],
-                "size": f"~{info['approx_size_gb']:.1f} GB",
-                "repo_id": info["huggingface_repo"],
-                "folder_name": folder,
-            }
-            for folder, info in CHAT_MODELS.items()
-        ]
-        
+        current_model = self.model_manager.get_current_chat_model() if self.model_manager else None
+        # Use saved context size if present; pass None to let the card auto-detect
+        # from compiled caches on disk when the user hasn't explicitly configured it.
+        saved_context_sizes = self._settings.get("model_context_sizes", {})
+
         self.model_cards = {}
-        
-        for model_info in models:
+
+        for folder, info in CHAT_MODELS.items():
             card = ModelCard(
-                model_id=model_info["id"],
-                display_name=model_info["display_name"],
-                size_str=model_info["size"],
-                repo_id=model_info["repo_id"],
-                folder_name=model_info["folder_name"]
+                model_id=folder,
+                display_name=info["display_name"],
+                size_str=f"~{info['approx_size_gb']:.1f} GB",
+                repo_id=info["huggingface_repo"],
+                folder_name=folder,
+                is_loaded=(folder == current_model),
+                context_size=saved_context_sizes.get(folder, None),
             )
-            
+            card.disable_context_above(info.get("context_window", 2 ** 32))
+
             card.download_requested.connect(self._on_download_requested)
             card.cancel_requested.connect(self._on_cancel_requested)
             card.delete_requested.connect(self._on_delete_requested)
-            
+            card.load_requested.connect(self._on_load_requested)
+            card.unload_requested.connect(self._on_unload_requested)
+            card.context_changed.connect(self._on_context_changed)
+
             self.cards_layout.addWidget(card)
-            self.model_cards[model_info["id"]] = card
+            self.model_cards[folder] = card
     
     def _on_download_requested(self, model_id: str):
         """Handle download request for a model."""
@@ -522,8 +439,6 @@ class SettingsDialog(QDialog):
         
         if success:
             card.set_downloaded(True)
-            # Refresh model combo box so new model appears in dropdown
-            self._populate_model_combo()
         else:
             card.set_downloading(False)
 
@@ -616,31 +531,6 @@ class SettingsDialog(QDialog):
         
         npu_group.setLayout(npu_layout)
         layout.addWidget(npu_group)
-
-        # Startup Section
-        startup_group = QGroupBox(
-            locales.get_string("settings.startup", "Startup")
-        )
-        startup_layout = QVBoxLayout()
-
-        self.autoload_model_checkbox = QCheckBox(
-            locales.get_string("settings.autoload_model", "Auto-load last used model on startup")
-        )
-        self.autoload_model_checkbox.setChecked(
-            self._settings.get("performance", {}).get("autoload_model", False)
-        )
-        self.autoload_model_checkbox.stateChanged.connect(self._on_autoload_changed)
-        startup_layout.addWidget(self.autoload_model_checkbox)
-
-        startup_help = QLabel(
-            locales.get_string("settings.autoload_help",
-                             "When enabled, the last used model will be loaded automatically")
-        )
-        startup_help.setStyleSheet("color: #888888; font-size: 11px; margin-left: 24px;")
-        startup_layout.addWidget(startup_help)
-
-        startup_group.setLayout(startup_layout)
-        layout.addWidget(startup_group)
 
         # Memory Management Section
         memory_group = QGroupBox(
@@ -1196,6 +1086,10 @@ class SettingsDialog(QDialog):
         stylesheet = get_theme_stylesheet(new_theme)
         QApplication.instance().setStyleSheet(stylesheet)
     
+    def _on_autoload_changed(self, state: int):
+        """Stub kept for settings that may still reference this key."""
+        pass
+
     def _on_npu_turbo_changed(self, state: int):
         """Handle NPU turbo mode toggle."""
         enabled = state == Qt.CheckState.Checked.value
@@ -1223,19 +1117,7 @@ class SettingsDialog(QDialog):
 
         logger.info(f"Tool calling mode: {mode}")
 
-    def _on_autoload_changed(self, state: int):
-        """Handle auto-load model on startup toggle."""
-        enabled = state == Qt.CheckState.Checked.value
-
-        # Save to settings
-        if "performance" not in self._settings:
-            self._settings["performance"] = {}
-        self._settings["performance"]["autoload_model"] = enabled
-        save_settings(self._settings)
-
-        logger.info(f"Auto-load model on startup: {enabled}")
-
-    def _open_folder(self, folder_path: Path):
+    def _open_folder(self, folder_path):
         """Open folder in system file explorer."""
         try:
             if os.name == 'nt':  # Windows
@@ -1257,125 +1139,54 @@ class SettingsDialog(QDialog):
         except Exception as e:
             logger.error(f"Failed to open file {file_path}: {e}")
     
-    def _populate_model_combo(self):
-        """Populate model switcher combo box with available models."""
-        self.model_combo.clear()
-        
-        if not self.model_manager:
-            self.model_combo.addItem(
-                locales.get_string("settings.no_models", "No models downloaded")
-            )
-            return
-        
-        available_models = self.model_manager.get_available_chat_models()
-        
-        if not available_models:
-            self.model_combo.addItem(
-                locales.get_string("settings.no_models", "No models downloaded")
-            )
-        else:
-            for folder_name in available_models:
-                display_name = self.model_manager.get_model_display_name(folder_name)
-                self.model_combo.addItem(display_name, folder_name)
-    
-    def _sync_context_combo(self, size: int):
-        """Set the context combo to *size*, or the largest enabled option if *size* is disabled."""
-        from PyQt6.QtCore import Qt
-        combo_model = self.context_combo.model()
-
-        # Try exact match first (only if the item is enabled)
-        for i in range(self.context_combo.count()):
-            if self.context_combo.itemData(i) == size:
-                if combo_model.item(i).flags() & Qt.ItemFlag.ItemIsEnabled:
-                    self.context_combo.setCurrentIndex(i)
-                    return
-                break  # Found but disabled — fall through to snap-down
-
-        # Snap down: largest enabled option whose value is ≤ size
-        best = -1
-        for i in range(self.context_combo.count()):
-            if (combo_model.item(i).flags() & Qt.ItemFlag.ItemIsEnabled
-                    and self.context_combo.itemData(i) <= size):
-                best = i
-        if best >= 0:
-            self.context_combo.setCurrentIndex(best)
-            return
-
-        # Fallback: first enabled item
-        for i in range(self.context_combo.count()):
-            if combo_model.item(i).flags() & Qt.ItemFlag.ItemIsEnabled:
-                self.context_combo.setCurrentIndex(i)
-                return
-
-    def _update_context_limits(self, model_folder: str) -> None:
-        """Disable context sizes that exceed the model's native context window."""
-        from PyQt6.QtCore import Qt
-        from bacchus import constants
-        model_info = constants.CHAT_MODELS.get(model_folder, {})
-        max_context = model_info.get("context_window")  # None = unknown model, allow all
-        combo_model = self.context_combo.model()
-        for i in range(self.context_combo.count()):
-            item = combo_model.item(i)
-            size = self.context_combo.itemData(i)
-            if max_context is not None and size > max_context:
-                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
-            else:
-                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEnabled)
-
-    def _on_model_selection_changed(self, index: int):
-        """Handle model selection change — update apply button and context combo."""
+    def _on_load_requested(self, model_id: str):
+        """Save context size, disable Load buttons, then start background model load."""
         if not self.model_manager:
             return
 
-        selected_folder = self.model_combo.currentData()
-        current_model = self.model_manager.get_current_chat_model()
+        card = self.model_cards.get(model_id)
+        if card:
+            context_size = card.context_combo.currentData()
+            if context_size:
+                self._settings.setdefault("model_context_sizes", {})[model_id] = context_size
+                save_settings(self._settings)
+                logger.info(f"Saved context size {context_size} for {model_id}")
 
-        self.apply_model_button.setEnabled(
-            selected_folder is not None and selected_folder != current_model
-        )
+        # Disable all Load buttons while loading
+        for c in self.model_cards.values():
+            c.load_button.setEnabled(False)
 
-        # Update which context sizes are valid, then sync to the saved size
-        if selected_folder:
-            from bacchus.constants import DEFAULT_CONTEXT_SIZE
-            self._update_context_limits(selected_folder)
-            saved_size = self._settings.get("model_context_sizes", {}).get(
-                selected_folder, DEFAULT_CONTEXT_SIZE
-            )
-            self._sync_context_combo(saved_size)
+        self._loading_model_folder = model_id
+        self.model_load_started.emit(model_id)
 
-    def _on_apply_model(self):
-        """Save context size, then load the selected model on a background thread."""
-        if not self.model_manager:
-            return
-
-        selected_folder = self.model_combo.currentData()
-        if not selected_folder:
-            return
-
-        # Persist the chosen context size before loading (model_manager reads it)
-        context_size = self.context_combo.currentData()
-        if context_size:
-            self._settings.setdefault("model_context_sizes", {})[selected_folder] = context_size
-            save_settings(self._settings)
-            logger.info(f"Saved context size {context_size} for {selected_folder}")
-
-        logger.info(f"Applying model switch: {selected_folder}")
-
-        # Disable UI while loading so user cannot trigger another load
-        self.model_combo.setEnabled(False)
-        self.context_combo.setEnabled(False)
-        self.apply_model_button.setEnabled(False)
-        self.apply_model_button.setText(locales.get_string("settings.loading", "Loading..."))
-
-        # Notify main window so the status bar and send-gate can update
-        self._loading_model_folder = selected_folder
-        self.model_load_started.emit(selected_folder)
-
-        # Start background load
         from bacchus.ui.model_load_worker import ModelLoadWorker
-        self._model_load_worker = ModelLoadWorker(self.model_manager, selected_folder, parent=self)
+        self._model_load_worker = ModelLoadWorker(self.model_manager, model_id, parent=self)
         self._model_load_worker.load_completed.connect(self._on_model_load_completed)
         self._model_load_worker.start()
+        logger.info(f"Model load started: {model_id}")
+
+    def _on_unload_requested(self, model_id: str):
+        """Unload the current model and update all card states."""
+        if not self.model_manager:
+            return
+
+        try:
+            self.model_manager.unload_chat_model()
+        except Exception as e:
+            logger.error(f"Failed to unload model: {e}")
+
+        for card in self.model_cards.values():
+            card.set_loaded(False)
+
+        self.set_current_model(None)
+        self.model_changed.emit("")
+        logger.info(f"Model unloaded: {model_id}")
+
+    def _on_context_changed(self, model_id: str, context_size: int):
+        """Persist the selected context size for a model card."""
+        self._settings.setdefault("model_context_sizes", {})[model_id] = context_size
+        save_settings(self._settings)
+        logger.debug(f"Context size {context_size} saved for {model_id}")
 
     def _on_model_load_completed(self, success: bool):
         """Handle model load completion from background worker."""
@@ -1383,75 +1194,58 @@ class SettingsDialog(QDialog):
         self._loading_model_folder = None
         self._model_load_worker = None
 
-        # Re-enable UI
-        self.model_combo.setEnabled(True)
-        self.context_combo.setEnabled(True)
-        self.apply_model_button.setText(locales.get_string("settings.apply", "Apply"))
-        self._on_model_selection_changed(self.model_combo.currentIndex())
+        # Re-enable all Load buttons
+        for card in self.model_cards.values():
+            card.load_button.setEnabled(True)
+
+        # Determine which model (if any) is now loaded
+        current_model = self.model_manager.get_current_chat_model() if self.model_manager else None
 
         if success:
-            display_name = self.model_manager.get_model_display_name(selected_folder)
-            self.set_current_model(display_name)
+            for folder, card in self.model_cards.items():
+                card.set_loaded(folder == current_model)
+
+            if self.model_manager and selected_folder:
+                display_name = self.model_manager.get_model_display_name(selected_folder)
+                self.set_current_model(display_name)
             self.model_changed.emit(selected_folder)
             logger.info(f"Model switched successfully to: {selected_folder}")
         else:
+            # Reset cards to reflect actual state
+            for folder, card in self.model_cards.items():
+                card.set_loaded(folder == current_model)
+
+            display_name = (
+                self.model_manager.get_model_display_name(selected_folder)
+                if self.model_manager and selected_folder
+                else (selected_folder or "model")
+            )
             msg = QMessageBox(self)
             msg.setIcon(QMessageBox.Icon.Critical)
             msg.setWindowTitle(locales.get_string("error.model_load_failed", "Model Load Failed"))
-            msg.setText(locales.get_string("error.model_load_failed_msg",
-                f"Failed to load {self.model_combo.currentText()}.\n\n"
+            msg.setText(locales.get_string(
+                "error.model_load_failed_msg",
+                f"Failed to load {display_name}.\n\n"
                 "Check the logs for details. The model files may be incomplete or "
-                "incompatible with your hardware."))
+                "incompatible with your hardware.",
+            ))
             msg.setWindowModality(Qt.WindowModality.ApplicationModal)
             msg.exec()
 
-    def _on_set_startup_model(self):
-        """Set the selected model as the startup model."""
-        selected_folder = self.model_combo.currentData()
-        if not selected_folder:
-            return
-
-        self._settings["startup_model"] = selected_folder
-        save_settings(self._settings)
-
-        if self.model_manager:
-            display_name = self.model_manager.get_model_display_name(selected_folder)
-        else:
-            display_name = selected_folder
-
-        self.startup_model_label.setText(
-            locales.get_string("settings.startup_model", "Startup model: ") + display_name
-        )
-        logger.info(f"Startup model set to: {selected_folder}")
-
-    def _on_clear_startup_model(self):
-        """Remove the configured startup model."""
-        self._settings["startup_model"] = None
-        save_settings(self._settings)
-        self.startup_model_label.setText(
-            locales.get_string("settings.startup_model", "Startup model: ") +
-            locales.get_string("settings.none", "None")
-        )
-        logger.info("Startup model cleared")
-    
     def set_current_model(self, model_name: Optional[str]):
         """
-        Set the currently loaded model display.
-        
+        Update the currently-loaded model header label.
+
         Args:
             model_name: Display name of loaded model, or None
         """
+        prefix = locales.get_string("settings.currently_loaded", "Currently loaded: ")
         if model_name:
-            text = locales.get_string("settings.currently_loaded", "Currently loaded: ")
-            text += model_name
+            self.current_model_label.setText(prefix + model_name)
         else:
-            text = locales.get_string("settings.currently_loaded", "Currently loaded: ")
-            text += locales.get_string("settings.no_model", "None")
-        
-        self.current_model_label.setText(text)
-
-        # Refresh combo box
-        self._populate_model_combo()
+            self.current_model_label.setText(
+                prefix + locales.get_string("settings.none", "None")
+            )
 
 
 class AddMCPServerDialog(QDialog):

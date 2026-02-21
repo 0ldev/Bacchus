@@ -50,6 +50,10 @@ CHAT_MODELS = {
 CONTEXT_SIZE_OPTIONS = [1024, 2048, 4096, 8192, 16384, 32768, 65536]
 DEFAULT_CONTEXT_SIZE = 16384
 
+# Generation parameter defaults
+DEFAULT_TEMPERATURE = 0.7    # Sampling temperature (0.0 = greedy, higher = more creative)
+DEFAULT_MIN_NEW_TOKENS = 0   # Minimum tokens before EOS is allowed (0 = no minimum)
+
 EMBEDDING_MODEL = {
     "folder_name": "all-minilm-l6-v2",
     "display_name": "all-MiniLM-L6-v2",

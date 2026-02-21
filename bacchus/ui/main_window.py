@@ -12,6 +12,7 @@ from typing import Optional
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QHBoxLayout,
+    QSizePolicy,
     QVBoxLayout,
     QMainWindow,
     QMenuBar,
@@ -78,7 +79,7 @@ class MainWindow(QMainWindow):
         
         # Set window properties
         self.setWindowTitle(locales.get_string("app.name", "Bacchus"))
-        self.setMinimumSize(1024, 768)
+        self.setMinimumWidth(900)
         
         # Restore window state from settings
         self._restore_window_state()
@@ -216,12 +217,14 @@ class MainWindow(QMainWindow):
         from bacchus.ui.prompt_area import PromptArea
         
         central = QWidget()
+        central.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
-        
+
         # Top section: sidebar + chat area
         top_widget = QWidget()
+        top_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         top_layout = QHBoxLayout()
         top_layout.setContentsMargins(0, 0, 0, 0)
         top_layout.setSpacing(0)
@@ -236,6 +239,7 @@ class MainWindow(QMainWindow):
         
         # Right side: chat area + prompt area in vertical layout
         right_widget = QWidget()
+        right_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         right_layout = QVBoxLayout()
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(0)
@@ -298,9 +302,10 @@ class MainWindow(QMainWindow):
         # Clear chat area (will show "no messages yet")
         self.chat_widget.load_conversation(conv_id)
         
-        # Focus input area
+        # Enable input now that a conversation is active
+        self.prompt_area.set_enabled(True)
         self.prompt_area.focus_input()
-        
+
         logger.info(f"Created new conversation {conv_id}")
     
     def _on_conversation_selected(self, conversation_id: int):
@@ -448,27 +453,30 @@ class MainWindow(QMainWindow):
         logger.info(f"Model load started: {model_folder_name}")
 
     def _on_model_changed(self, model_folder_name: str):
-        """Handle model change from settings."""
-        logger.info(f"Model changed to: {model_folder_name}")
+        """Handle model change from settings (load or unload)."""
+        logger.info(f"Model changed to: {model_folder_name!r}")
 
         self._model_is_loading = False
+        self.status_bar_widget.set_loading(False)
 
         if not self.model_manager:
             return
 
-        # Update status bar with display name and device
-        display_name = self.model_manager.get_model_display_name(model_folder_name)
-        device = self.model_manager.get_active_device()
-        self.status_bar_widget.set_loading(False)
-        self.status_bar_widget.set_model(display_name, device)
-
-        # Enable/disable prompt area
-        self.prompt_area.set_model_loaded(True)
-        self.prompt_area.set_vlm_mode(self.model_manager.is_vl_pipeline_loaded())
-        # Save last model to settings
-        from bacchus.config import save_settings
-        self._settings["last_model"] = model_folder_name
-        save_settings(self._settings)
+        if model_folder_name:
+            # A model was loaded
+            display_name = self.model_manager.get_model_display_name(model_folder_name)
+            device = self.model_manager.get_active_device()
+            self.status_bar_widget.set_model(display_name, device)
+            self.prompt_area.set_model_loaded(True)
+            self.prompt_area.set_vlm_mode(self.model_manager.is_vl_pipeline_loaded())
+            from bacchus.config import save_settings
+            self._settings["last_model"] = model_folder_name
+            save_settings(self._settings)
+        else:
+            # Model was unloaded
+            self.status_bar_widget.set_model(None)
+            self.prompt_area.set_model_loaded(False)
+            self.prompt_area.set_vlm_mode(False)
 
     def _on_open_data_folder(self) -> None:
         """Handle Open Data Folder action."""
@@ -880,6 +888,12 @@ class MainWindow(QMainWindow):
         max_new_tokens = context_window - estimated_used - 512  # 512 token safety buffer
         max_new_tokens = max(512, max_new_tokens)  # At least 512 tokens
 
+        # Read generation parameters fresh from disk (user may have changed them mid-session)
+        from bacchus.constants import DEFAULT_TEMPERATURE, DEFAULT_MIN_NEW_TOKENS
+        _gen_settings = load_settings().get("generation", {})
+        _temperature = _gen_settings.get("temperature", DEFAULT_TEMPERATURE)
+        _min_new_tokens = _gen_settings.get("min_new_tokens", DEFAULT_MIN_NEW_TOKENS)
+
         # VLM path: uses VLMInferenceWorker with full context replay and tool-call support
         if self.model_manager.is_vl_pipeline_loaded():
             from bacchus.inference.vlm_worker import VLMInferenceWorker
@@ -946,7 +960,8 @@ class MainWindow(QMainWindow):
                 system_message=system_message,
                 messages=messages,
                 max_tokens=max_new_tokens,
-                temperature=0.7,
+                temperature=_temperature,
+                min_new_tokens=_min_new_tokens if self._in_response_phase else 0,
                 generation_config=vlm_generation_config,
                 streaming=self._in_response_phase,
             )
@@ -1028,7 +1043,8 @@ class MainWindow(QMainWindow):
             llm_pipeline=llm_pipeline,
             prompt=prompt,
             max_tokens=max_new_tokens,
-            temperature=0.7,
+            temperature=_temperature,
+            min_new_tokens=_min_new_tokens if self._in_response_phase else 0,
             generation_config=generation_config  # None for regular, or decision schema
         )
 

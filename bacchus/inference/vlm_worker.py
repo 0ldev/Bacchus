@@ -36,6 +36,7 @@ class VLMInferenceWorker(QThread):
         messages: List[Any],
         max_tokens: int = 512,
         temperature: float = 0.7,
+        min_new_tokens: int = 0,
         generation_config: Optional[Any] = None,
         streaming: bool = False,
         parent=None,
@@ -62,6 +63,7 @@ class VLMInferenceWorker(QThread):
         self.messages = messages
         self.max_tokens = max_tokens
         self.temperature = temperature
+        self.min_new_tokens = min_new_tokens
         self.generation_config = generation_config
         self.streaming = streaming
 
@@ -215,6 +217,8 @@ class VLMInferenceWorker(QThread):
         else:
             final_config = ov_genai.GenerationConfig()
             final_config.max_new_tokens = self.max_tokens
+            if self.min_new_tokens > 0:
+                final_config.min_new_tokens = self.min_new_tokens
             if self.temperature > 0:
                 final_config.do_sample = True
                 final_config.temperature = self.temperature

@@ -81,7 +81,7 @@ class ConversationListItem(QWidget):
         self.setStyleSheet("""
             ConversationListItem {
                 border-radius: 6px;
-                border-bottom: 1px solid rgba(128, 128, 128, 0.12);
+                border-bottom: 1px solid rgba(128, 128, 128, 0.35);
                 margin: 1px 2px;
             }
         """)

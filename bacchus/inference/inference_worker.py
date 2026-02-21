@@ -29,6 +29,7 @@ class InferenceWorker(QThread):
         prompt: str,
         max_tokens: int = 512,
         temperature: float = 0.7,
+        min_new_tokens: int = 0,
         generation_config: Optional[Any] = None,
         parent=None
     ):
@@ -48,6 +49,7 @@ class InferenceWorker(QThread):
         self.prompt = prompt
         self.max_tokens = max_tokens
         self.temperature = temperature
+        self.min_new_tokens = min_new_tokens
         self.generation_config = generation_config  # Pre-configured for structured output
         self._cancelled = False
 
@@ -72,8 +74,8 @@ class InferenceWorker(QThread):
                 # Create standard generation config
                 config = ov_genai.GenerationConfig()
                 config.max_new_tokens = self.max_tokens
-
-                # Set temperature (if supported)
+                if self.min_new_tokens > 0:
+                    config.min_new_tokens = self.min_new_tokens
                 if self.temperature > 0:
                     config.do_sample = True
                     config.temperature = self.temperature
