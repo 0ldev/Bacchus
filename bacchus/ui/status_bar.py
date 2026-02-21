@@ -38,6 +38,11 @@ class StatusBar(QWidget):
         self._current_model: Optional[str] = None
         self._active_device: Optional[str] = None  # NPU, CPU, etc.
         self._mcp_servers: dict[str, str] = {}  # server_name -> status
+        self._loading: bool = False
+        self._loading_name: str = ""
+        self._loading_dots: int = 0
+        self._loading_timer = QTimer()
+        self._loading_timer.timeout.connect(self._tick_loading)
         
         # Fixed height
         self.setFixedHeight(STATUS_BAR_HEIGHT)
@@ -187,8 +192,36 @@ class StatusBar(QWidget):
         """
         self._current_model = model_name
         self._active_device = device
+        self._loading = False
+        self._loading_timer.stop()
         self._update_model_display()
         logger.info(f"Status bar model updated: {model_name} on {device}")
+
+    def set_loading(self, loading: bool, display_name: str = "") -> None:
+        """
+        Show/hide an animated loading indicator in the model label.
+
+        Args:
+            loading: True to start animation, False to stop
+            display_name: Short model name shown in the animation
+        """
+        if loading:
+            self._loading = True
+            self._loading_name = display_name
+            self._loading_dots = 0
+            self._loading_timer.start(600)
+            self._tick_loading()
+        else:
+            self._loading = False
+            self._loading_timer.stop()
+            self._update_model_display()
+
+    def _tick_loading(self) -> None:
+        """Advance the animated ellipsis on the loading label."""
+        dots = "." * (self._loading_dots % 4)
+        self._loading_dots += 1
+        name = self._loading_name or "model"
+        self.model_label.setText(f"⏳ Loading {name}{dots}")
     
     def set_mcp_servers(self, servers: dict[str, str]):
         """

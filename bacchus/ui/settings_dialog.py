@@ -50,8 +50,9 @@ class SettingsDialog(QDialog):
     Tabs: General, Models, Performance, MCP Servers
     """
 
-    model_changed = pyqtSignal(str)  # Emits model folder name
-    mcp_status_changed = pyqtSignal()  # Emits when MCP server status changes
+    model_changed = pyqtSignal(str)       # Emits model folder name when load completes
+    model_load_started = pyqtSignal(str)  # Emits model folder name when load begins
+    mcp_status_changed = pyqtSignal()     # Emits when MCP server status changes
 
     def __init__(self, parent=None, model_manager=None, mcp_manager=None, initial_tab=0):
         """
@@ -78,6 +79,10 @@ class SettingsDialog(QDialog):
         
         # Track active downloads
         self._active_downloads: Dict[str, 'DownloadWorker'] = {}
+
+        # Track active model load worker
+        self._model_load_worker = None
+        self._loading_model_folder: Optional[str] = None
         
         # Main layout
         main_layout = QHBoxLayout()
@@ -351,7 +356,6 @@ class SettingsDialog(QDialog):
         self.context_combo = QComboBox()
         for size in CONTEXT_SIZE_OPTIONS:
             self.context_combo.addItem(f"{size:,} tokens", size)
-        self._sync_context_combo(DEFAULT_CONTEXT_SIZE)
 
         context_help = QLabel(
             locales.get_string("settings.context_size_help",
@@ -363,6 +367,9 @@ class SettingsDialog(QDialog):
         context_layout.addWidget(context_help)
         context_layout.addStretch()
         active_layout.addLayout(context_layout)
+
+        # Apply context limits and sync for the currently selected model
+        self._on_model_selection_changed(self.model_combo.currentIndex())
 
         # Startup model row
         startup_layout = QHBoxLayout()
@@ -1271,13 +1278,48 @@ class SettingsDialog(QDialog):
                 self.model_combo.addItem(display_name, folder_name)
     
     def _sync_context_combo(self, size: int):
-        """Set the context combo to the closest matching size value."""
+        """Set the context combo to *size*, or the largest enabled option if *size* is disabled."""
+        from PyQt6.QtCore import Qt
+        combo_model = self.context_combo.model()
+
+        # Try exact match first (only if the item is enabled)
         for i in range(self.context_combo.count()):
             if self.context_combo.itemData(i) == size:
+                if combo_model.item(i).flags() & Qt.ItemFlag.ItemIsEnabled:
+                    self.context_combo.setCurrentIndex(i)
+                    return
+                break  # Found but disabled — fall through to snap-down
+
+        # Snap down: largest enabled option whose value is ≤ size
+        best = -1
+        for i in range(self.context_combo.count()):
+            if (combo_model.item(i).flags() & Qt.ItemFlag.ItemIsEnabled
+                    and self.context_combo.itemData(i) <= size):
+                best = i
+        if best >= 0:
+            self.context_combo.setCurrentIndex(best)
+            return
+
+        # Fallback: first enabled item
+        for i in range(self.context_combo.count()):
+            if combo_model.item(i).flags() & Qt.ItemFlag.ItemIsEnabled:
                 self.context_combo.setCurrentIndex(i)
                 return
-        # If exact match not found, select last (largest) option
-        self.context_combo.setCurrentIndex(self.context_combo.count() - 1)
+
+    def _update_context_limits(self, model_folder: str) -> None:
+        """Disable context sizes that exceed the model's native context window."""
+        from PyQt6.QtCore import Qt
+        from bacchus import constants
+        model_info = constants.CHAT_MODELS.get(model_folder, {})
+        max_context = model_info.get("context_window")  # None = unknown model, allow all
+        combo_model = self.context_combo.model()
+        for i in range(self.context_combo.count()):
+            item = combo_model.item(i)
+            size = self.context_combo.itemData(i)
+            if max_context is not None and size > max_context:
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+            else:
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEnabled)
 
     def _on_model_selection_changed(self, index: int):
         """Handle model selection change — update apply button and context combo."""
@@ -1291,16 +1333,17 @@ class SettingsDialog(QDialog):
             selected_folder is not None and selected_folder != current_model
         )
 
-        # Sync context combo to the saved size for this model
+        # Update which context sizes are valid, then sync to the saved size
         if selected_folder:
             from bacchus.constants import DEFAULT_CONTEXT_SIZE
+            self._update_context_limits(selected_folder)
             saved_size = self._settings.get("model_context_sizes", {}).get(
                 selected_folder, DEFAULT_CONTEXT_SIZE
             )
             self._sync_context_combo(saved_size)
 
     def _on_apply_model(self):
-        """Save context size, then load the selected model."""
+        """Save context size, then load the selected model on a background thread."""
         if not self.model_manager:
             return
 
@@ -1317,14 +1360,33 @@ class SettingsDialog(QDialog):
 
         logger.info(f"Applying model switch: {selected_folder}")
 
+        # Disable UI while loading so user cannot trigger another load
+        self.model_combo.setEnabled(False)
+        self.context_combo.setEnabled(False)
         self.apply_model_button.setEnabled(False)
         self.apply_model_button.setText(locales.get_string("settings.loading", "Loading..."))
 
-        try:
-            success = self.model_manager.load_chat_model(selected_folder)
-        except Exception as e:
-            logger.error(f"Unexpected error loading model: {e}", exc_info=True)
-            success = False
+        # Notify main window so the status bar and send-gate can update
+        self._loading_model_folder = selected_folder
+        self.model_load_started.emit(selected_folder)
+
+        # Start background load
+        from bacchus.ui.model_load_worker import ModelLoadWorker
+        self._model_load_worker = ModelLoadWorker(self.model_manager, selected_folder, parent=self)
+        self._model_load_worker.load_completed.connect(self._on_model_load_completed)
+        self._model_load_worker.start()
+
+    def _on_model_load_completed(self, success: bool):
+        """Handle model load completion from background worker."""
+        selected_folder = self._loading_model_folder
+        self._loading_model_folder = None
+        self._model_load_worker = None
+
+        # Re-enable UI
+        self.model_combo.setEnabled(True)
+        self.context_combo.setEnabled(True)
+        self.apply_model_button.setText(locales.get_string("settings.apply", "Apply"))
+        self._on_model_selection_changed(self.model_combo.currentIndex())
 
         if success:
             display_name = self.model_manager.get_model_display_name(selected_folder)
@@ -1341,10 +1403,6 @@ class SettingsDialog(QDialog):
                 "incompatible with your hardware."))
             msg.setWindowModality(Qt.WindowModality.ApplicationModal)
             msg.exec()
-
-        self.apply_model_button.setText(locales.get_string("settings.apply", "Apply"))
-        # Re-evaluate whether Apply should remain enabled
-        self._on_model_selection_changed(self.model_combo.currentIndex())
 
     def _on_set_startup_model(self):
         """Set the selected model as the startup model."""

@@ -115,6 +115,7 @@ class MainWindow(QMainWindow):
         
         # Track settings dialog to prevent multiple instances
         self._settings_dialog = None
+        self._model_is_loading: bool = False  # True while ModelLoadWorker is running
 
         # Tools allowed for the rest of this session (cleared on restart)
         self._session_allowed_tools: set = set()
@@ -409,6 +410,7 @@ class MainWindow(QMainWindow):
             initial_tab=initial_tab
         )
         dialog.model_changed.connect(self._on_model_changed)
+        dialog.model_load_started.connect(self._on_model_load_started)
         dialog.mcp_status_changed.connect(self._update_mcp_status)
         
         # Set current model in dialog
@@ -428,9 +430,22 @@ class MainWindow(QMainWindow):
         
         dialog.exec()
     
+    def _on_model_load_started(self, model_folder_name: str) -> None:
+        """Handle model load beginning — lock the send button and animate the status bar."""
+        self._model_is_loading = True
+        self.prompt_area.set_model_loaded(False)
+        if self.model_manager:
+            display_name = self.model_manager.get_model_display_name(model_folder_name)
+        else:
+            display_name = model_folder_name
+        self.status_bar_widget.set_loading(True, display_name)
+        logger.info(f"Model load started: {model_folder_name}")
+
     def _on_model_changed(self, model_folder_name: str):
         """Handle model change from settings."""
         logger.info(f"Model changed to: {model_folder_name}")
+
+        self._model_is_loading = False
 
         if not self.model_manager:
             return
@@ -438,12 +453,12 @@ class MainWindow(QMainWindow):
         # Update status bar with display name and device
         display_name = self.model_manager.get_model_display_name(model_folder_name)
         device = self.model_manager.get_active_device()
+        self.status_bar_widget.set_loading(False)
         self.status_bar_widget.set_model(display_name, device)
 
         # Enable/disable prompt area
         self.prompt_area.set_model_loaded(True)
         self.prompt_area.set_vlm_mode(self.model_manager.is_vl_pipeline_loaded())
-
         # Save last model to settings
         from bacchus.config import save_settings
         self._settings["last_model"] = model_folder_name
@@ -492,6 +507,14 @@ class MainWindow(QMainWindow):
 
         if not self.model_manager or not self.model_manager.is_chat_model_loaded():
             logger.warning("Cannot send message: no model loaded")
+            return
+
+        # Block send while a new model is being loaded in the background
+        if self._model_is_loading:
+            self.prompt_area.restore_after_blocked_send(text)
+            self.prompt_area.show_notice(
+                "⏳ Model is still loading — please hold on. Your message has been kept."
+            )
             return
 
         # Prevent sending while inference is running

@@ -256,6 +256,21 @@ class PromptArea(QWidget):
         self.image_label.mousePressEvent = lambda e: self.clear_attached_image()
         info_row.addWidget(self.image_label)
 
+        # Transient notice label (model loading, etc.) — hidden by default
+        self.notice_label = QLabel()
+        self.notice_label.setStyleSheet("""
+            QLabel {
+                background-color: #FFF3CD;
+                color: #856404;
+                border-radius: 4px;
+                padding: 5px 10px;
+                font-size: 12px;
+            }
+        """)
+        self.notice_label.setWordWrap(True)
+        self.notice_label.hide()
+        info_row.addWidget(self.notice_label)
+
         info_row.addStretch()
 
         main_layout.addLayout(info_row)
@@ -483,6 +498,34 @@ class PromptArea(QWidget):
         if self.add_image_button.isVisible():
             self.add_image_button.setEnabled(enabled)
         self._update_send_button_state()
+
+    def show_notice(self, text: str, duration_ms: int = 5000) -> None:
+        """
+        Show a transient notice message above the input field.
+
+        The notice auto-hides after *duration_ms* milliseconds.
+
+        Args:
+            text: Message to display.
+            duration_ms: How long to show the notice (default 5 s).
+        """
+        self.notice_label.setText(text)
+        self.notice_label.show()
+        QTimer.singleShot(duration_ms, self.notice_label.hide)
+
+    def restore_after_blocked_send(self, text: str) -> None:
+        """
+        Restore *text* to the input field after a blocked send.
+
+        PromptArea clears the input synchronously after emitting
+        send_message_requested.  Call this method in the connected slot
+        before returning; the restore is deferred by one event-loop tick
+        so it runs after the clear.
+
+        Args:
+            text: Original message text to restore.
+        """
+        QTimer.singleShot(0, lambda: self.text_input.setPlainText(text))
 
     def clear_document(self):
         """Clear attached document without confirmation."""
