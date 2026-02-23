@@ -10,7 +10,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, TYPE_CHECKING
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -39,6 +39,9 @@ from PyQt6.QtWidgets import (
 
 from bacchus import constants, locales
 from bacchus.config import load_settings, save_settings, get_config_dir, load_secrets, save_secrets
+
+if TYPE_CHECKING:
+    from bacchus.ui.download_worker import DownloadWorker
 
 logger = logging.getLogger(__name__)
 

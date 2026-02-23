@@ -19,6 +19,9 @@ LOGS_DIR = APP_DATA_DIR / "logs"
 SCRIPTS_DIR = APP_DATA_DIR / "scripts"
 SANDBOX_DIR = APP_DATA_DIR / "sandbox"
 IMAGES_DIR = APP_DATA_DIR / "images"
+DOCUMENTS_DIR = APP_DATA_DIR / "documents"
+EMBEDDINGS_DIR = APP_DATA_DIR / "embeddings"
+PROJECTS_DIR = APP_DATA_DIR / "projects"
 
 # Model information — OpenVINO NF4 models from 0ldev, optimised for Intel NPU
 CHAT_MODELS = {

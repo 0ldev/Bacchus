@@ -43,11 +43,5 @@ then: {"action": "tool_call", "tool": "execute_command", "arguments": {"command"
 
 **Available tools:**
 
-- **read_file**: Read the contents of a file (params: `path`)
-- **write_file**: Write content to a file (params: `path`, `content`)
-- **list_directory**: List the contents of a directory (params: `path`)
-- **create_directory**: Create a new directory (and any missing parent directories) (params: `path`)
-- **edit_file**: Edit a file by replacing an exact string with new content. The old_str must match exactly (including whitespace). Fails if old_str is not found or appears more than once. (params: `path`, `old_str`, `new_str`)
-- **execute_command**: Execute a shell command (params: `command`)
 - **search_web**: Search the internet using duckduckgo (params: `query`, `num_results`)
 - **fetch_webpage**: Fetch and read webpage content. Navigation and boilerplate are stripped automatically. (params: `url`, `max_length`)

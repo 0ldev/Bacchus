@@ -94,3 +94,27 @@ def find_top_k_chunks(
 
     # Return top k chunks
     return [chunk for chunk, _ in chunk_scores[:k]]
+
+
+def merge_and_retrieve(
+    conv_chunks: List[Chunk],
+    project_chunks: List[Chunk],
+    query_embedding: np.ndarray,
+    k: int = 3,
+    min_similarity: float = 0.3
+) -> List[Chunk]:
+    """
+    Retrieve top-k chunks from a combined pool of conversation and project chunks.
+
+    Args:
+        conv_chunks: Chunks from the conversation's attached document
+        project_chunks: Chunks from the project's shared documents
+        query_embedding: Query vector
+        k: Number of top chunks to return
+        min_similarity: Minimum similarity threshold
+
+    Returns:
+        List of k most similar chunks from the combined pool
+    """
+    combined = conv_chunks + project_chunks
+    return find_top_k_chunks(combined, query_embedding, k=k, min_similarity=min_similarity)

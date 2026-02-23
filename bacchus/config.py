@@ -277,6 +277,16 @@ def get_conversations_dir() -> Path:
     return get_app_data_dir() / "conversations"
 
 
+def get_projects_dir() -> Path:
+    """
+    Get the projects directory.
+
+    Returns:
+        Path to projects directory
+    """
+    return get_app_data_dir() / "projects"
+
+
 def get_temp_dir() -> Path:
     """
     Get the temporary files directory.
@@ -323,6 +333,9 @@ def ensure_directories() -> None:
         app_data / "scripts",
         app_data / "sandbox",
         app_data / "images",
+        app_data / "documents",
+        app_data / "embeddings",
+        app_data / "projects",
     ]
 
     for directory in directories:
